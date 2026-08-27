@@ -381,6 +381,61 @@ app.post('/api/products/seed', protect, adminOnly, async (req, res) => {
     }
 });
 
+// --- METHOD 3: MANUAL BROWSER/API SEED ENDPOINT (Bypasses network restriction when online) ---
+app.get('/api/seed-products-manually', async (req, res) => {
+    try {
+        const sampleProducts = [
+            {
+                name: "Heavy Duty Hammer",
+                category: "Power & Hand Tools",
+                subCategory: "Spanners",
+                price: 1500,
+                stock: 25,
+                description: "High-grade steel hammer with a comfortable rubber grip.",
+                image: "/uploads/hardware-default.jpg"
+            },
+            {
+                name: "Cordless Power Drill 18V",
+                category: "Power & Hand Tools",
+                subCategory: "Drills",
+                price: 8500,
+                stock: 10,
+                description: "High performance lithium-ion drill with variable speed settings.",
+                image: "/uploads/hardware-default.jpg"
+            },
+            {
+                name: "Motorcycle Brake Pads Set",
+                category: "Motorcycle & Motorbike Parts",
+                subCategory: "Brakes",
+                price: 1200,
+                stock: 40,
+                description: "Durable organic brake pads compatible with standard commuter bikes.",
+                image: "/uploads/hardware-default.jpg"
+            },
+            {
+                name: "Heavy Duty Vehicle Jack 3Ton",
+                category: "Vehicle Spare Parts",
+                subCategory: "Engine",
+                price: 14500,
+                stock: 5,
+                description: "Hydraulic floor jack designed for cars, SUVs, and light trucks.",
+                image: "/uploads/hardware-default.jpg"
+            }
+        ];
+
+        const seeded = await Product.insertMany(sampleProducts);
+        res.status(201).json({ 
+            success: true, 
+            message: "Database seeded successfully online via Method 3!", 
+            count: seeded.length,
+            products: seeded 
+        });
+    } catch (error) {
+        console.error("Manual Seeding Error:", error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Update Hardware Product (Admin Only)
 app.put('/api/products/:id', protect, adminOnly, upload.single('image'), async (req, res) => {
     try {
