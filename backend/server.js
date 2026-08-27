@@ -27,12 +27,16 @@ const MONGO_URI = process.env.MONGODB_URI
   || process.env.MONGO_URI 
   || 'mongodb+srv://wambuicathrine217_db_user:JM8U3oBz4UxE0DQ9@cluster0.arqtzh6.mongodb.net/hardware_sales?retryWrites=true&w=majority&appName=Cluster0';
 
+mongoose.connect(MONGO_URI)
+  .then(() => console.log("✅ Connected to Hardware Database successfully"))
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err));
+
 // --- SCHEMAS & MODELS ---
 
 // 1. User Schema (Includes Role & Suspension Status)
 const UserSchema = new mongoose.Schema({
     fullName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     phone: { type: String, default: "" },
     password: { type: String, required: true },
     role: { type: String, enum: ['user', 'admin'], default: 'user' },
@@ -109,8 +113,8 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// --- FULL EXPANDED PRODUCT CATALOGUE ---
-const productsCatalogue = [
+// --- FULL INITIAL PRODUCTS CATALOGUE (From Source 5) ---
+const initialProducts = [
     // ==================== 1. VEHICLE SPARE PARTS ====================
     {
         name: "Bosch Platinum Spark Plugs (Set of 4)",
@@ -293,12 +297,9 @@ const productsCatalogue = [
     }
 ];
 
-// --- SEEDING DEFAULT ADMINS, CATEGORIES & PRODUCTS ---
+// --- SEEDING DEFAULT ADMINS, CATEGORIES & PRODUCTS ON STARTUP ---
 const seedDatabase = async () => {
     try {
-        await mongoose.connect(MONGO_URI);
-        console.log("✅ Connected to Hardware Database successfully");
-
         // 1. Seed Store Settings
         const settings = await StoreSettings.findOne();
         if (!settings) await StoreSettings.create({});
@@ -316,7 +317,14 @@ const seedDatabase = async () => {
             await Category.updateOne({ name: cat.name }, { $setOnInsert: cat }, { upsert: true });
         }
 
-        // 3. Seed Max 2 Admin Accounts
+        // 3. Auto-seed Full Product Catalogue if empty (Solves Render empty array issue)
+        const productCount = await Product.countDocuments();
+        if (productCount === 0) {
+            await Product.insertMany(initialProducts);
+            console.log(`✅ Automatically seeded ${initialProducts.length} items across all categories into MongoDB Atlas!`);
+        }
+
+        // 4. Seed Default Admin Accounts
         const adminCount = await User.countDocuments({ role: 'admin' });
         if (adminCount < 2) {
             const defaultAdmins = [
@@ -339,21 +347,8 @@ const seedDatabase = async () => {
                 }
             }
         }
-
-        // 4. Auto-seed Products Catalogue if empty
-        const productCount = await Product.countDocuments();
-        if (productCount === 0) {
-            await Product.insertMany(productsCatalogue);
-            console.log(`🚀 Automatically seeded ${productsCatalogue.length} products into MongoDB Atlas on startup!`);
-        }
-
-        // Start Server after successful DB connection and seeding
-        app.listen(PORT, () => {
-            console.log(`🚀 Hardware Sales Server running on port ${PORT}`);
-        });
-
     } catch (err) {
-        console.error("❌ MongoDB Connection & Seeding Error:", err);
+        console.error("Error seeding initial data:", err);
     }
 };
 seedDatabase();
@@ -392,7 +387,7 @@ const adminOnly = (req, res, next) => {
 
 // ==================== 1. USER AUTH ROUTES ====================
 
-// User Signup (Auto creates user-specific cart)
+// User Signup (Forces njorogemichael37@gmail.com to be Admin automatically)
 app.post('/api/auth/register', async (req, res) => {
     const { fullName, email, password, phone } = req.body;
     try {
@@ -400,11 +395,21 @@ app.post('/api/auth/register', async (req, res) => {
             return res.status(400).json({ message: 'Please provide full name, email and password' });
         }
 
-        const userExists = await User.findOne({ email });
+        const normalizedEmail = email.trim().toLowerCase();
+        const userExists = await User.findOne({ email: normalizedEmail });
         if (userExists) return res.status(400).json({ message: 'Email address is already registered' });
 
+        // Assign 'admin' role if email matches the requested address, otherwise 'user'
+        const assignedRole = (normalizedEmail === 'njorogemichael37@gmail.com') ? 'admin' : 'user';
+
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ fullName, email, phone, password: hashedPassword, role: 'user' });
+        const user = await User.create({ 
+            fullName, 
+            email: normalizedEmail, 
+            phone, 
+            password: hashedPassword, 
+            role: assignedRole 
+        });
 
         // Initialize user cart
         await Cart.create({ user: user._id, items: [] });
@@ -416,6 +421,7 @@ app.post('/api/auth/register', async (req, res) => {
             user: { id: user._id, fullName: user.fullName, email: user.email, role: user.role }
         });
     } catch (error) {
+        console.error("Registration error:", error);
         res.status(500).json({ message: 'Server error during registration' });
     }
 });
@@ -424,7 +430,8 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     try {
-        const user = await User.findOne({ email });
+        const normalizedEmail = email ? email.trim().toLowerCase() : '';
+        const user = await User.findOne({ email: normalizedEmail });
         if (!user) return res.status(401).json({ message: 'Invalid email or password' });
 
         if (user.isSuspended) {
@@ -704,14 +711,9 @@ app.delete('/api/admin/users/:id', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Promotes a user to Admin (Enforces Max 2 Admin Limit)
+// Promotes a user to Admin
 app.put('/api/admin/promote/:id', protect, adminOnly, async (req, res) => {
     try {
-        const adminCount = await User.countDocuments({ role: 'admin' });
-        if (adminCount >= 2) {
-            return res.status(400).json({ message: 'Security Limit Reached: Maximum 2 Admin accounts allowed.' });
-        }
-
         const user = await User.findByIdAndUpdate(req.params.id, { role: 'admin' }, { new: true }).select('-password');
         res.json({ message: 'User successfully promoted to Admin', user });
     } catch (error) {
@@ -814,4 +816,9 @@ app.put('/api/admin/orders/:id/status', protect, adminOnly, async (req, res) => 
     } catch (error) {
         res.status(500).json({ message: 'Failed to update order status' });
     }
+});
+
+// --- START SERVER ---
+app.listen(PORT, () => {
+    console.log(`🚀 Hardware Sales Server running on port ${PORT}`);
 });
