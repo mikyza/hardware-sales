@@ -4,26 +4,32 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, ShoppingCart, User as UserIcon, Menu, X, MessageCircle, 
   Plus, Package, Settings, LogOut, Wrench, Car, Bike, Hammer, Zap, 
-  Trash2, Edit, AlertCircle, CheckCircle, Users, ShoppingBag
+  Trash2, Edit, AlertCircle, CheckCircle, Users, ShoppingBag, Gift,
+  Flame, Filter, Layers, ChevronDown, ShieldCheck, Box
 } from 'lucide-react';
 
 // --- API CONFIGURATION ---
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://hardware-sales.onrender.com';
 
-// --- HELPER TO FORMAT IMAGE URLS ---
+// --- HELPER TO FORMAT IMAGE URLS (UNSPLASH & LOCAL RENDER UPLOADS) ---
 const getImageUrl = (url: string) => {
-  if (!url) return "https://via.placeholder.com/400?text=No+Image";
-  if (url.startsWith('http')) return url;
+  if (!url) return "https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&q=80&w=600";
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
   return `${API_BASE_URL}${url}`;
 };
 
-// --- ICON MAPPER ---
+// --- ICON MAPPER FOR CATEGORIES ---
 const getIcon = (iconName: string) => {
-  switch (iconName) {
-    case 'car': return <Car size={20} />;
-    case 'bike': return <Bike size={20} />;
-    case 'hammer': return <Hammer size={20} />;
-    case 'zap': return <Zap size={20} />;
+  switch (iconName?.toLowerCase()) {
+    case 'car': 
+    case 'vehicle spare parts': return <Car size={20} />;
+    case 'bike': 
+    case 'motorcycle & motorbike parts': return <Bike size={20} />;
+    case 'hammer': 
+    case 'power & hand tools': return <Hammer size={20} />;
+    case 'zap': 
+    case 'electrical & solar': return <Zap size={20} />;
+    case 'building & plumbing supplies': return <Package size={20} />;
     default: return <Wrench size={20} />;
   }
 };
@@ -56,13 +62,17 @@ export default function ProHardwareApp() {
   // --- ADMIN STATE ---
   const [activeAdminTab, setActiveAdminTab] = useState<'dashboard'|'products'|'categories'|'users'|'orders'|'settings'>('dashboard');
   const [adminData, setAdminData] = useState({ users: [], orders: [] });
-  const [newProduct, setNewProduct] = useState({ name: "", category: "", subCategory: "", price: "", stock: "", description: "" });
+  const [newProduct, setNewProduct] = useState({ 
+    name: "", category: "", subCategory: "", price: "", stock: "10", description: "", isWeeklyDeal: false, weeklyGiftDescription: "" 
+  });
   const [newProductFile, setNewProductFile] = useState<File | null>(null);
   const [newCategory, setNewCategory] = useState({ name: "", description: "", icon: "wrench" });
 
-  // --- UI STATE ---
+  // --- UI & FILTER STATE ---
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [selectedSubCategory, setSelectedSubCategory] = useState("All");
+  const [showDealsOnly, setShowDealsOnly] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // --- INITIALIZATION ---
@@ -84,6 +94,11 @@ export default function ProHardwareApp() {
       if (currentUser?.role === 'admin') fetchAdminData();
     }
   }, [token, currentUser?.role]);
+
+  // Reset subcategory filter when category changes
+  useEffect(() => {
+    setSelectedSubCategory("All");
+  }, [selectedCategory]);
 
   // --- FETCHERS ---
   const fetchInitialData = async () => {
@@ -137,7 +152,6 @@ export default function ProHardwareApp() {
         localStorage.setItem('hardwareUser', JSON.stringify(data.user));
         setShowAuthModal(false);
         setAuthForm({ fullName: "", email: "", password: "", phone: "" });
-        alert(`Welcome, ${data.user.fullName}!`);
       } else {
         alert(data.message || "Authentication failed");
       }
@@ -163,7 +177,6 @@ export default function ProHardwareApp() {
       });
       if (res.ok) {
         setCart(await res.json());
-        alert("Added to cart!");
       }
     } catch (err) { alert("Failed to add item."); }
   };
@@ -204,7 +217,7 @@ export default function ProHardwareApp() {
   const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     const formData = new FormData();
-    Object.entries(newProduct).forEach(([key, val]) => formData.append(key, val));
+    Object.entries(newProduct).forEach(([key, val]) => formData.append(key, String(val)));
     if (newProductFile) formData.append('image', newProductFile);
 
     try {
@@ -212,7 +225,8 @@ export default function ProHardwareApp() {
       if (res.ok) {
         alert("Product added!");
         fetchInitialData();
-        setNewProduct({ name: "", category: "", subCategory: "", price: "", stock: "", description: "" });
+        setNewProduct({ name: "", category: "", subCategory: "", price: "", stock: "10", description: "", isWeeklyDeal: false, weeklyGiftDescription: "" });
+        setNewProductFile(null);
       } else alert(await res.text());
     } catch (err) { alert("Error adding product"); }
   };
@@ -261,30 +275,54 @@ export default function ProHardwareApp() {
     } catch (err) { alert("Failed to update settings"); }
   };
 
-  // --- FILTERING ---
+  // --- DYNAMIC CATEGORIES & SUBCATEGORIES COMPUTATION ---
+  const displayCategories = useMemo(() => {
+    if (categories.length > 0) return categories;
+    const catSet = new Set(products.map(p => p.category).filter(Boolean));
+    return Array.from(catSet).map(name => ({ _id: name, name, icon: name }));
+  }, [categories, products]);
+
+  const availableSubCategories = useMemo(() => {
+    const relevantProducts = products.filter(p => selectedCategory === "All" || p.category === selectedCategory);
+    const subSet = new Set(relevantProducts.map(p => p.subCategory).filter(Boolean));
+    return Array.from(subSet);
+  }, [products, selectedCategory]);
+
+  // --- FILTERING LOGIC ---
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesCategory = selectedCategory === "All" || p.category === selectedCategory || p.subCategory === selectedCategory;
-      return matchesSearch && matchesCategory;
+      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            (p.description && p.description.toLowerCase().includes(searchQuery.toLowerCase()));
+      const matchesCategory = selectedCategory === "All" || p.category === selectedCategory;
+      const matchesSubCategory = selectedSubCategory === "All" || p.subCategory === selectedSubCategory;
+      const matchesDeals = !showDealsOnly || p.isWeeklyDeal;
+      return matchesSearch && matchesCategory && matchesSubCategory && matchesDeals;
     });
-  }, [products, searchQuery, selectedCategory]);
+  }, [products, searchQuery, selectedCategory, selectedSubCategory, showDealsOnly]);
 
 
   // ==========================================
-  // RENDER: ADMIN DASHBOARD
+  // RENDER: DARK THEME ADMIN DASHBOARD
   // ==========================================
   const renderAdminPanel = () => (
-    <div className="min-h-screen bg-slate-100 p-4 md:p-8">
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-8">
       <div className="max-w-7xl mx-auto">
-        <h2 className="text-3xl font-bold text-slate-800 mb-6 flex items-center gap-3">
-          <Settings className="text-amber-600" size={32} /> Admin Control Panel
+        <h2 className="text-3xl font-extrabold text-white mb-6 flex items-center gap-3">
+          <Settings className="text-amber-500" size={32} /> Admin Control Panel
         </h2>
 
         {/* Tab Navigation */}
-        <div className="flex overflow-x-auto gap-2 mb-8 bg-white p-2 rounded-lg shadow-sm">
+        <div className="flex overflow-x-auto gap-2 mb-8 bg-slate-900 p-2 rounded-xl border border-slate-800">
           {['dashboard', 'products', 'categories', 'orders', 'users', 'settings'].map(tab => (
-            <button key={tab} onClick={() => setActiveAdminTab(tab as any)} className={`px-4 py-2 rounded-md font-semibold capitalize whitespace-nowrap ${activeAdminTab === tab ? 'bg-amber-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>
+            <button 
+              key={tab} 
+              onClick={() => setActiveAdminTab(tab as any)} 
+              className={`px-5 py-2.5 rounded-lg font-semibold capitalize whitespace-nowrap transition-all ${
+                activeAdminTab === tab 
+                  ? 'bg-amber-600 text-white shadow-lg shadow-amber-600/30' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
               {tab}
             </button>
           ))}
@@ -293,50 +331,59 @@ export default function ProHardwareApp() {
         {/* TAB CONTENTS */}
         {activeAdminTab === 'dashboard' && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-            <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-blue-500">
-              <p className="text-slate-500 text-sm">Total Products</p>
-              <p className="text-3xl font-bold">{products.length}</p>
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 border-l-4 border-l-blue-500 shadow-xl">
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Total Products</p>
+              <p className="text-3xl font-extrabold text-white">{products.length}</p>
             </div>
-            <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-amber-500">
-              <p className="text-slate-500 text-sm">Total Categories</p>
-              <p className="text-3xl font-bold">{categories.length}</p>
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 border-l-4 border-l-amber-500 shadow-xl">
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Categories</p>
+              <p className="text-3xl font-extrabold text-white">{displayCategories.length}</p>
             </div>
-            <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-green-500">
-              <p className="text-slate-500 text-sm">Total Orders</p>
-              <p className="text-3xl font-bold">{adminData.orders.length}</p>
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 border-l-4 border-l-emerald-500 shadow-xl">
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Total Orders</p>
+              <p className="text-3xl font-extrabold text-white">{adminData.orders.length}</p>
             </div>
-            <div className="bg-white p-6 rounded-xl shadow-sm border-l-4 border-purple-500">
-              <p className="text-slate-500 text-sm">Total Users</p>
-              <p className="text-3xl font-bold">{adminData.users.length}</p>
+            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 border-l-4 border-l-purple-500 shadow-xl">
+              <p className="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Registered Users</p>
+              <p className="text-3xl font-extrabold text-white">{adminData.users.length}</p>
             </div>
           </div>
         )}
 
         {activeAdminTab === 'products' && (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1 bg-white p-6 rounded-xl shadow-sm">
-              <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Plus size={20} /> Add Hardware Item</h3>
+            <div className="lg:col-span-1 bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+              <h3 className="font-bold text-lg text-white mb-4 flex items-center gap-2"><Plus size={20} className="text-amber-500"/> Add Hardware Item</h3>
               <form onSubmit={handleAddProduct} className="space-y-4">
-                <input type="text" placeholder="Product Name" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" required />
+                <input type="text" placeholder="Product Name" value={newProduct.name} onChange={e => setNewProduct({...newProduct, name: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none placeholder-slate-500 text-sm" required />
                 <div className="grid grid-cols-2 gap-2">
-                  <input type="number" placeholder="Price (Ksh)" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" required />
-                  <input type="number" placeholder="Stock Qty" value={newProduct.stock} onChange={e => setNewProduct({...newProduct, stock: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" required />
+                  <input type="number" placeholder="Price (Ksh)" value={newProduct.price} onChange={e => setNewProduct({...newProduct, price: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none text-sm" required />
+                  <input type="number" placeholder="Stock Qty" value={newProduct.stock} onChange={e => setNewProduct({...newProduct, stock: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none text-sm" required />
                 </div>
-                <select value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" required>
-                  <option value="">Select Category</option>
-                  {categories.map(c => <option key={c._id} value={c.name}>{c.name}</option>)}
-                </select>
-                <input type="text" placeholder="Sub-Category (e.g., Brakes)" value={newProduct.subCategory} onChange={e => setNewProduct({...newProduct, subCategory: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" required />
-                <textarea placeholder="Description" value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full p-2 border rounded focus:ring-2 focus:ring-amber-500 outline-none" rows={3}></textarea>
-                <input type="file" onChange={e => e.target.files && setNewProductFile(e.target.files[0])} className="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-amber-50 file:text-amber-700 hover:file:bg-amber-100" />
-                <button type="submit" className="w-full bg-slate-900 text-white p-3 rounded font-bold hover:bg-amber-600 transition">Save Product</button>
+                <input type="text" placeholder="Category (e.g., Vehicle Spare Parts)" value={newProduct.category} onChange={e => setNewProduct({...newProduct, category: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none text-sm" required />
+                <input type="text" placeholder="Sub-Category (e.g., Brakes)" value={newProduct.subCategory} onChange={e => setNewProduct({...newProduct, subCategory: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none text-sm" required />
+                <textarea placeholder="Description" value={newProduct.description} onChange={e => setNewProduct({...newProduct, description: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg focus:border-amber-500 outline-none text-sm" rows={3}></textarea>
+                
+                <div className="p-3 bg-slate-800 rounded-lg border border-slate-700 space-y-2">
+                  <label className="flex items-center gap-2 text-xs font-bold text-amber-400 cursor-pointer">
+                    <input type="checkbox" checked={newProduct.isWeeklyDeal} onChange={e => setNewProduct({...newProduct, isWeeklyDeal: e.target.checked})} className="rounded bg-slate-900 border-slate-700 text-amber-500 focus:ring-0" />
+                    Mark as Weekly Deal
+                  </label>
+                  {newProduct.isWeeklyDeal && (
+                    <input type="text" placeholder="Gift Description (e.g., Free 1L Engine Oil)" value={newProduct.weeklyGiftDescription} onChange={e => setNewProduct({...newProduct, weeklyGiftDescription: e.target.value})} className="w-full p-2 bg-slate-900 border border-slate-700 text-white rounded text-xs outline-none" />
+                  )}
+                </div>
+
+                <input type="file" onChange={e => e.target.files && setNewProductFile(e.target.files[0])} className="w-full text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-amber-500/10 file:text-amber-400 hover:file:bg-amber-500/20" />
+                <button type="submit" className="w-full bg-amber-600 hover:bg-amber-500 text-white p-3 rounded-lg font-bold transition shadow-lg shadow-amber-600/30 text-sm">Save Product</button>
               </form>
             </div>
-            <div className="lg:col-span-2 bg-white p-6 rounded-xl shadow-sm overflow-x-auto">
-              <h3 className="font-bold text-lg mb-4 text-slate-800">Inventory</h3>
-              <table className="w-full text-left border-collapse">
+
+            <div className="lg:col-span-2 bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-x-auto">
+              <h3 className="font-bold text-lg text-white mb-4">Inventory Catalogue</h3>
+              <table className="w-full text-left border-collapse text-sm">
                 <thead>
-                  <tr className="bg-slate-100 text-slate-600 text-sm">
+                  <tr className="border-b border-slate-800 text-slate-400 text-xs uppercase tracking-wider">
                     <th className="p-3">Product</th>
                     <th className="p-3">Category</th>
                     <th className="p-3">Price</th>
@@ -344,17 +391,24 @@ export default function ProHardwareApp() {
                     <th className="p-3">Action</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="divide-y divide-slate-800">
                   {products.map(p => (
-                    <tr key={p._id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <tr key={p._id} className="hover:bg-slate-800/50">
                       <td className="p-3 flex items-center gap-3">
-                        <img src={getImageUrl(p.image)} className="w-10 h-10 rounded object-cover" alt="" />
-                        <span className="font-medium line-clamp-1">{p.name}</span>
+                        <img src={getImageUrl(p.image)} className="w-10 h-10 rounded-lg object-cover bg-slate-800 border border-slate-700" alt="" />
+                        <div>
+                          <p className="font-medium text-white line-clamp-1">{p.name}</p>
+                          <p className="text-[10px] text-amber-500 font-bold">{p.subCategory}</p>
+                        </div>
                       </td>
-                      <td className="p-3 text-sm text-slate-500">{p.category}</td>
-                      <td className="p-3 font-semibold text-amber-600">Ksh {p.price}</td>
-                      <td className="p-3 text-sm">{p.stock}</td>
-                      <td className="p-3"><button className="text-red-500 hover:text-red-700"><Trash2 size={18} /></button></td>
+                      <td className="p-3 text-xs text-slate-400">{p.category}</td>
+                      <td className="p-3 font-semibold text-amber-400">Ksh {p.price}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-0.5 text-xs font-bold rounded ${p.stock > 10 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>
+                          {p.stock}
+                        </span>
+                      </td>
+                      <td className="p-3"><button className="text-red-400 hover:text-red-300 transition"><Trash2 size={16} /></button></td>
                     </tr>
                   ))}
                 </tbody>
@@ -364,11 +418,11 @@ export default function ProHardwareApp() {
         )}
 
         {activeAdminTab === 'users' && (
-          <div className="bg-white p-6 rounded-xl shadow-sm overflow-x-auto">
-            <h3 className="font-bold text-lg mb-4 text-slate-800">User Management</h3>
-            <table className="w-full text-left border-collapse">
+          <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-x-auto">
+            <h3 className="font-bold text-lg text-white mb-4">User Management</h3>
+            <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="bg-slate-100 text-slate-600 text-sm">
+                <tr className="border-b border-slate-800 text-slate-400 text-xs uppercase">
                   <th className="p-3">Name</th>
                   <th className="p-3">Email</th>
                   <th className="p-3">Role</th>
@@ -376,16 +430,16 @@ export default function ProHardwareApp() {
                   <th className="p-3">Actions</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-800">
                 {adminData.users.map((u: any) => (
-                  <tr key={u._id} className="border-b hover:bg-slate-50">
-                    <td className="p-3 font-medium">{u.fullName}</td>
-                    <td className="p-3 text-slate-500 text-sm">{u.email}</td>
-                    <td className="p-3"><span className={`px-2 py-1 text-xs rounded-full ${u.role === 'admin' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-800'}`}>{u.role}</span></td>
-                    <td className="p-3"><span className={`px-2 py-1 text-xs rounded-full ${u.isSuspended ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>{u.isSuspended ? 'Suspended' : 'Active'}</span></td>
+                  <tr key={u._id} className="hover:bg-slate-800/50">
+                    <td className="p-3 font-medium text-white">{u.fullName}</td>
+                    <td className="p-3 text-slate-400 text-xs">{u.email}</td>
+                    <td className="p-3"><span className={`px-2 py-1 text-xs font-bold rounded-full ${u.role === 'admin' ? 'bg-amber-500/20 text-amber-400' : 'bg-slate-800 text-slate-300'}`}>{u.role}</span></td>
+                    <td className="p-3"><span className={`px-2 py-1 text-xs font-bold rounded-full ${u.isSuspended ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'}`}>{u.isSuspended ? 'Suspended' : 'Active'}</span></td>
                     <td className="p-3">
                       {u.role !== 'admin' && (
-                        <button onClick={() => toggleUserSuspension(u._id)} className="text-sm px-3 py-1 rounded bg-slate-200 hover:bg-slate-300">
+                        <button onClick={() => toggleUserSuspension(u._id)} className="text-xs px-3 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
                           {u.isSuspended ? 'Unsuspend' : 'Suspend'}
                         </button>
                       )}
@@ -398,11 +452,11 @@ export default function ProHardwareApp() {
         )}
 
         {activeAdminTab === 'orders' && (
-           <div className="bg-white p-6 rounded-xl shadow-sm overflow-x-auto">
-             <h3 className="font-bold text-lg mb-4 text-slate-800">Order Processing</h3>
-             <table className="w-full text-left border-collapse">
+           <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl overflow-x-auto">
+             <h3 className="font-bold text-lg text-white mb-4">Order Processing</h3>
+             <table className="w-full text-left border-collapse text-sm">
                <thead>
-                 <tr className="bg-slate-100 text-slate-600 text-sm">
+                 <tr className="border-b border-slate-800 text-slate-400 text-xs uppercase">
                    <th className="p-3">Order ID</th>
                    <th className="p-3">Customer</th>
                    <th className="p-3">Total</th>
@@ -410,17 +464,17 @@ export default function ProHardwareApp() {
                    <th className="p-3">Update Status</th>
                  </tr>
                </thead>
-               <tbody>
+               <tbody className="divide-y divide-slate-800">
                  {adminData.orders.map((o: any) => (
-                   <tr key={o._id} className="border-b hover:bg-slate-50">
+                   <tr key={o._id} className="hover:bg-slate-800/50">
                      <td className="p-3 text-xs text-slate-500">{o._id.substring(0, 8)}</td>
-                     <td className="p-3 font-medium text-sm">{o.user?.fullName}</td>
-                     <td className="p-3 font-bold text-amber-600">Ksh {o.totalAmount}</td>
+                     <td className="p-3 font-medium text-white">{o.user?.fullName}</td>
+                     <td className="p-3 font-bold text-amber-400">Ksh {o.totalAmount}</td>
                      <td className="p-3 capitalize">
-                       <span className={`px-2 py-1 text-xs rounded-full ${o.status === 'delivered' ? 'bg-green-100 text-green-800' : 'bg-blue-100 text-blue-800'}`}>{o.status}</span>
+                       <span className={`px-2 py-1 text-xs font-bold rounded-full ${o.status === 'delivered' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-blue-500/20 text-blue-400'}`}>{o.status}</span>
                      </td>
                      <td className="p-3">
-                        <select value={o.status} onChange={e => updateOrderStatus(o._id, e.target.value)} className="text-sm border p-1 rounded">
+                        <select value={o.status} onChange={e => updateOrderStatus(o._id, e.target.value)} className="text-xs bg-slate-800 border border-slate-700 text-white p-1.5 rounded outline-none focus:border-amber-500">
                           <option value="pending">Pending</option>
                           <option value="shipped">Shipped</option>
                           <option value="delivered">Delivered</option>
@@ -436,28 +490,28 @@ export default function ProHardwareApp() {
 
         {activeAdminTab === 'categories' && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-             <div className="bg-white p-6 rounded-xl shadow-sm">
-                <h3 className="font-bold text-lg mb-4">Add Category</h3>
-                <form onSubmit={handleAddCategory} className="space-y-4">
-                  <input type="text" placeholder="Category Name" value={newCategory.name} onChange={e => setNewCategory({...newCategory, name: e.target.value})} className="w-full p-2 border rounded outline-none" required />
-                  <input type="text" placeholder="Description" value={newCategory.description} onChange={e => setNewCategory({...newCategory, description: e.target.value})} className="w-full p-2 border rounded outline-none" />
-                  <select value={newCategory.icon} onChange={e => setNewCategory({...newCategory, icon: e.target.value})} className="w-full p-2 border rounded outline-none">
+             <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+                <h3 className="font-bold text-lg text-white mb-4">Add Category</h3>
+                <form onSubmit={handleAddCategory} className="space-y-4 text-sm">
+                  <input type="text" placeholder="Category Name" value={newCategory.name} onChange={e => setNewCategory({...newCategory, name: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500" required />
+                  <input type="text" placeholder="Description" value={newCategory.description} onChange={e => setNewCategory({...newCategory, description: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500" />
+                  <select value={newCategory.icon} onChange={e => setNewCategory({...newCategory, icon: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500">
                     <option value="wrench">Wrench (Tools)</option>
                     <option value="car">Car (Vehicle Parts)</option>
                     <option value="bike">Bike (Motorcycle)</option>
                     <option value="hammer">Hammer (Building)</option>
                     <option value="zap">Zap (Electrical)</option>
                   </select>
-                  <button type="submit" className="w-full bg-slate-900 text-white p-2 rounded">Save Category</button>
+                  <button type="submit" className="w-full bg-amber-600 text-white p-3 rounded-lg font-bold hover:bg-amber-500 transition">Save Category</button>
                 </form>
              </div>
-             <div className="bg-white p-6 rounded-xl shadow-sm">
-               <h3 className="font-bold text-lg mb-4">Current Categories</h3>
+             <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
+               <h3 className="font-bold text-lg text-white mb-4">Current Categories</h3>
                <ul className="space-y-2">
-                 {categories.map(c => (
-                   <li key={c._id} className="flex items-center gap-3 p-3 bg-slate-50 rounded border">
-                     <span className="text-slate-500">{getIcon(c.icon)}</span>
-                     <span className="font-medium">{c.name}</span>
+                 {displayCategories.map(c => (
+                   <li key={c._id} className="flex items-center gap-3 p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                     <span className="text-amber-500">{getIcon(c.icon || c.name)}</span>
+                     <span className="font-medium text-white text-sm">{c.name}</span>
                    </li>
                  ))}
                </ul>
@@ -466,26 +520,26 @@ export default function ProHardwareApp() {
         )}
 
         {activeAdminTab === 'settings' && (
-          <div className="bg-white p-6 rounded-xl shadow-sm max-w-2xl">
-            <h3 className="font-bold text-lg mb-4">Store Appearance & Info</h3>
-            <form onSubmit={updateStoreSettings} className="space-y-4">
+          <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl max-w-2xl">
+            <h3 className="font-bold text-lg text-white mb-4">Store Appearance & Info</h3>
+            <form onSubmit={updateStoreSettings} className="space-y-4 text-sm">
               <div>
-                <label className="text-sm font-semibold text-slate-600">Store Name</label>
-                <input type="text" value={storeSettings.storeName} onChange={e => setStoreSettings({...storeSettings, storeName: e.target.value})} className="w-full p-2 border rounded" />
+                <label className="text-xs font-semibold text-slate-400">Store Name</label>
+                <input type="text" value={storeSettings.storeName} onChange={e => setStoreSettings({...storeSettings, storeName: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500 mt-1" />
               </div>
               <div>
-                <label className="text-sm font-semibold text-slate-600">Tagline</label>
-                <input type="text" value={storeSettings.tagline} onChange={e => setStoreSettings({...storeSettings, tagline: e.target.value})} className="w-full p-2 border rounded" />
+                <label className="text-xs font-semibold text-slate-400">Tagline</label>
+                <input type="text" value={storeSettings.tagline} onChange={e => setStoreSettings({...storeSettings, tagline: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500 mt-1" />
               </div>
               <div>
-                <label className="text-sm font-semibold text-slate-600">Hero Title</label>
-                <input type="text" value={storeSettings.heroTitle} onChange={e => setStoreSettings({...storeSettings, heroTitle: e.target.value})} className="w-full p-2 border rounded" />
+                <label className="text-xs font-semibold text-slate-400">Hero Title</label>
+                <input type="text" value={storeSettings.heroTitle} onChange={e => setStoreSettings({...storeSettings, heroTitle: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500 mt-1" />
               </div>
               <div>
-                <label className="text-sm font-semibold text-slate-600">Contact Phone</label>
-                <input type="text" value={storeSettings.contactPhone} onChange={e => setStoreSettings({...storeSettings, contactPhone: e.target.value})} className="w-full p-2 border rounded" />
+                <label className="text-xs font-semibold text-slate-400">Contact Phone</label>
+                <input type="text" value={storeSettings.contactPhone} onChange={e => setStoreSettings({...storeSettings, contactPhone: e.target.value})} className="w-full p-3 bg-slate-800 border border-slate-700 text-white rounded-lg outline-none focus:border-amber-500 mt-1" />
               </div>
-              <button type="submit" className="bg-amber-600 text-white px-6 py-2 rounded font-bold hover:bg-amber-700">Apply Settings</button>
+              <button type="submit" className="bg-amber-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-amber-500 transition shadow-lg shadow-amber-600/30">Apply Settings</button>
             </form>
           </div>
         )}
@@ -495,15 +549,15 @@ export default function ProHardwareApp() {
 
 
   // ==========================================
-  // MAIN RENDER: USER FACING STORE
+  // MAIN RENDER: DARK THEME USER STOREFRONT
   // ==========================================
   
   if (currentUser?.role === 'admin') {
     return (
-      <div className="min-h-screen font-sans bg-slate-100">
-        <header className="bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-50">
+      <div className="min-h-screen font-sans bg-slate-950 text-slate-100">
+        <header className="bg-slate-900 border-b border-slate-800 text-white p-4 flex justify-between items-center sticky top-0 z-50">
           <h1 className="font-bold text-xl flex items-center gap-2"><Wrench className="text-amber-500"/> {storeSettings.storeName} Admin</h1>
-          <button onClick={handleLogout} className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded text-sm font-bold hover:bg-red-700 transition"><LogOut size={16}/> Logout</button>
+          <button onClick={handleLogout} className="flex items-center gap-2 bg-red-600/80 hover:bg-red-600 px-4 py-2 rounded-lg text-sm font-bold transition"><LogOut size={16}/> Logout</button>
         </header>
         {renderAdminPanel()}
       </div>
@@ -511,16 +565,16 @@ export default function ProHardwareApp() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       {/* HEADER */}
-      <header className="sticky top-0 z-40 bg-slate-900 text-white shadow-xl">
+      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 shadow-2xl">
         <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button className="lg:hidden text-amber-500" onClick={() => setIsMobileMenuOpen(true)}>
+            <button className="lg:hidden text-amber-500 hover:text-amber-400 transition" onClick={() => setIsMobileMenuOpen(true)}>
               <Menu size={28} />
             </button>
             <div className="flex flex-col">
-              <h1 className="text-xl md:text-3xl font-extrabold flex items-center gap-2 tracking-tight">
+              <h1 className="text-xl md:text-3xl font-black flex items-center gap-2 tracking-tight text-white">
                 <Wrench className="text-amber-500 hidden sm:block" /> {storeSettings.storeName}
               </h1>
               <p className="text-xs text-slate-400 italic hidden sm:block">{storeSettings.tagline}</p>
@@ -529,29 +583,32 @@ export default function ProHardwareApp() {
 
           <div className="hidden md:flex flex-1 max-w-lg mx-8 relative">
             <input 
-              type="text" placeholder="Search vehicle parts, tools..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none placeholder-slate-400 transition"
+              type="text" 
+              placeholder="Search spare parts, tools, electricals..." 
+              value={searchQuery} 
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-none placeholder-slate-500 transition text-sm"
             />
-            <Search className="absolute left-3 top-2.5 text-slate-400" size={20} />
+            <Search className="absolute left-3 top-3 text-slate-500" size={18} />
           </div>
 
           <div className="flex items-center gap-4 md:gap-6">
-            <div className="relative cursor-pointer hover:text-amber-400 transition" onClick={() => setShowCart(true)}>
+            <div className="relative cursor-pointer hover:text-amber-400 transition p-2 rounded-lg hover:bg-slate-800" onClick={() => setShowCart(true)}>
               <ShoppingCart size={24} />
               {(cart.items?.length > 0) && (
-                <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[10px] font-bold rounded-full h-5 w-5 flex items-center justify-center border-2 border-slate-900">
+                <span className="absolute top-1 right-1 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full h-5 w-5 flex items-center justify-center border-2 border-slate-900">
                   {cart.items.reduce((acc: number, item: any) => acc + item.quantity, 0)}
                 </span>
               )}
             </div>
 
             {currentUser ? (
-              <button onClick={handleLogout} className="hidden md:flex items-center gap-2 text-slate-300 hover:text-red-400 transition">
-                <LogOut size={20} /> <span>Logout</span>
+              <button onClick={handleLogout} className="hidden md:flex items-center gap-2 text-slate-400 hover:text-red-400 transition text-sm font-semibold">
+                <LogOut size={18} /> <span>Logout</span>
               </button>
             ) : (
-              <button onClick={() => setShowAuthModal(true)} className="flex items-center gap-2 bg-amber-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-amber-700 transition">
-                <UserIcon size={20} /> <span className="hidden md:block">Login</span>
+              <button onClick={() => setShowAuthModal(true)} className="flex items-center gap-2 bg-amber-600 text-white px-4 py-2.5 rounded-xl font-bold hover:bg-amber-500 transition shadow-lg shadow-amber-600/20 text-sm">
+                <UserIcon size={18} /> <span className="hidden md:block">Login</span>
               </button>
             )}
           </div>
@@ -559,41 +616,54 @@ export default function ProHardwareApp() {
       </header>
 
       {/* MOBILE SEARCH */}
-      <div className="md:hidden p-4 bg-slate-800 border-b border-slate-700">
+      <div className="md:hidden p-4 bg-slate-900 border-b border-slate-800">
         <div className="relative">
           <input 
-            type="text" placeholder="Search hardware..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 rounded bg-slate-700 text-white outline-none"
+            type="text" 
+            placeholder="Search spare parts, tools..." 
+            value={searchQuery} 
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm outline-none placeholder-slate-500"
           />
-          <Search className="absolute left-3 top-2.5 text-slate-400" size={20} />
+          <Search className="absolute left-3 top-3 text-slate-500" size={18} />
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto flex flex-col lg:flex-row relative">
         {/* SIDEBAR NAVIGATION */}
-        <aside className={`${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 fixed lg:static top-0 left-0 h-full w-72 bg-white shadow-2xl lg:shadow-none lg:border-r border-slate-200 z-50 transition-transform duration-300 ease-in-out`}>
-          <div className="p-4 flex justify-between items-center lg:hidden border-b bg-slate-900 text-white">
+        <aside className={`${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 fixed lg:static top-0 left-0 h-full w-72 bg-slate-900 lg:bg-transparent border-r border-slate-800/80 z-50 transition-transform duration-300 ease-in-out`}>
+          <div className="p-4 flex justify-between items-center lg:hidden border-b border-slate-800 bg-slate-950 text-white">
             <span className="font-bold text-lg flex items-center gap-2"><Wrench className="text-amber-500"/> Categories</span>
             <button onClick={() => setIsMobileMenuOpen(false)}><X size={24} /></button>
           </div>
-          <div className="p-4 overflow-y-auto h-full pb-24">
+          <div className="p-4 overflow-y-auto h-full pb-24 space-y-2">
+            <p className="text-xs font-extrabold text-slate-500 uppercase tracking-wider px-3 mb-2">Categories</p>
             <button 
               onClick={() => {setSelectedCategory("All"); setIsMobileMenuOpen(false);}}
-              className={`w-full text-left py-3 px-4 rounded-lg font-bold mb-2 flex items-center gap-3 transition ${selectedCategory === "All" ? "bg-amber-100 text-amber-800 border-l-4 border-amber-600" : "hover:bg-slate-100 text-slate-700"}`}
+              className={`w-full text-left py-3 px-4 rounded-xl font-bold flex items-center gap-3 transition text-sm ${selectedCategory === "All" ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" : "hover:bg-slate-800/60 text-slate-300"}`}
             >
-              <ShoppingBag size={20} /> All Inventory
+              <ShoppingBag size={18} /> All Inventory
             </button>
             
-            {categories.map((cat) => (
-              <div key={cat._id} className="mb-2">
-                <button 
-                  onClick={() => {setSelectedCategory(cat.name); setIsMobileMenuOpen(false);}}
-                  className={`w-full text-left py-3 px-4 rounded-lg font-bold flex items-center gap-3 transition ${selectedCategory === cat.name ? "bg-amber-100 text-amber-800 border-l-4 border-amber-600" : "hover:bg-slate-100 text-slate-700"}`}
-                >
-                  <span className="text-slate-500">{getIcon(cat.icon)}</span> {cat.name}
-                </button>
-              </div>
+            {displayCategories.map((cat) => (
+              <button 
+                key={cat._id}
+                onClick={() => {setSelectedCategory(cat.name); setIsMobileMenuOpen(false);}}
+                className={`w-full text-left py-3 px-4 rounded-xl font-bold flex items-center gap-3 transition text-sm ${selectedCategory === cat.name ? "bg-amber-500/10 text-amber-400 border border-amber-500/30" : "hover:bg-slate-800/60 text-slate-300"}`}
+              >
+                <span className="text-amber-500">{getIcon(cat.icon || cat.name)}</span> {cat.name}
+              </button>
             ))}
+
+            {/* WEEKLY DEALS FILTER */}
+            <div className="pt-4 border-t border-slate-800 mt-4">
+              <button 
+                onClick={() => setShowDealsOnly(!showDealsOnly)}
+                className={`w-full text-left py-3 px-4 rounded-xl font-bold flex items-center gap-3 transition text-sm ${showDealsOnly ? "bg-amber-600 text-white shadow-lg shadow-amber-600/30" : "bg-slate-900 border border-slate-800 text-slate-300 hover:border-amber-500/50"}`}
+              >
+                <Flame size={18} className={showDealsOnly ? "text-white" : "text-amber-500"} /> Weekly Deals & Offers
+              </button>
+            </div>
           </div>
         </aside>
 
@@ -601,98 +671,166 @@ export default function ProHardwareApp() {
         <main className="flex-1 w-full lg:w-[calc(100%-18rem)]">
           {/* HERO BANNER */}
           <section className="p-4 md:p-6 lg:p-8">
-            <div className="w-full bg-slate-900 rounded-2xl overflow-hidden relative shadow-xl h-[250px] md:h-[350px] flex items-center p-8 md:p-16">
-              <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?q=80&w=2070')] bg-cover bg-center opacity-30 mix-blend-overlay"></div>
+            <div className="w-full bg-slate-900 rounded-3xl overflow-hidden relative border border-slate-800 shadow-2xl h-[260px] md:h-[320px] flex items-center p-8 md:p-14">
+              <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?q=80&w=2070')] bg-cover bg-center opacity-20 mix-blend-overlay"></div>
               <div className="relative z-10 max-w-2xl">
-                <span className="bg-amber-500 text-slate-900 font-bold px-3 py-1 rounded-full text-xs md:text-sm uppercase tracking-wider mb-4 inline-block">Industrial Grade</span>
-                <h2 className="text-3xl md:text-5xl font-extrabold text-white mb-4 leading-tight">
+                <span className="bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold px-3 py-1 rounded-full text-xs uppercase tracking-wider mb-4 inline-flex items-center gap-1">
+                  <ShieldCheck size={14} /> Industrial Grade Quality
+                </span>
+                <h2 className="text-3xl md:text-5xl font-black text-white mb-3 leading-tight">
                   {storeSettings.heroTitle}
                 </h2>
-                <p className="text-slate-300 md:text-lg mb-6">{storeSettings.tagline}</p>
-                <a href="#inventory" className="bg-amber-600 text-white px-6 md:px-8 py-3 rounded-lg font-bold hover:bg-amber-500 transition shadow-lg shadow-amber-600/30">Shop Now</a>
+                <p className="text-slate-400 text-sm md:text-base mb-6">{storeSettings.tagline}</p>
+                <a href="#inventory" className="bg-amber-600 text-white px-7 py-3 rounded-xl font-bold hover:bg-amber-500 transition shadow-lg shadow-amber-600/30 inline-block text-sm">Explore Catalog</a>
               </div>
             </div>
           </section>
 
-          {/* HARDWARE CATALOG */}
+          {/* CATALOG HEADER & SUB-CATEGORY FILTER DROPDOWN */}
           <section id="inventory" className="p-4 md:p-6 lg:p-8 pt-0">
-            <div className="flex justify-between items-end mb-6 pb-2 border-b border-slate-200">
-              <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
-                {selectedCategory === "All" ? "Complete Inventory" : selectedCategory}
-              </h2>
-              <span className="text-sm font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">{filteredProducts.length} items</span>
+            <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 mb-6 pb-4 border-b border-slate-800">
+              <div>
+                <h2 className="text-2xl font-black text-white flex items-center gap-2">
+                  {selectedCategory === "All" ? "Complete Inventory" : selectedCategory}
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">Showing {filteredProducts.length} hardware products</p>
+              </div>
+
+              {/* DYNAMIC SUB-CATEGORY DROPDOWN */}
+              {availableSubCategories.length > 0 && (
+                <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-1.5 self-start sm:self-auto">
+                  <Filter size={16} className="text-amber-500" />
+                  <span className="text-xs text-slate-400 font-medium">Sub-Category:</span>
+                  <select 
+                    value={selectedSubCategory}
+                    onChange={(e) => setSelectedSubCategory(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-amber-400 outline-none cursor-pointer"
+                  >
+                    <option value="All" className="bg-slate-900 text-white">All Sub-Categories</option>
+                    {availableSubCategories.map(sub => (
+                      <option key={sub} value={sub} className="bg-slate-900 text-white">{sub}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
 
+            {/* PRODUCT GRID */}
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
               {filteredProducts.map(product => (
-                <div key={product._id} className="bg-white rounded-xl shadow-sm hover:shadow-xl transition-shadow border border-slate-100 overflow-hidden flex flex-col group">
-                  <div className="h-40 md:h-48 overflow-hidden relative bg-slate-50 p-4 flex justify-center items-center">
-                    <img src={getImageUrl(product.image)} alt={product.name} className="max-h-full max-w-full object-contain group-hover:scale-110 transition-transform duration-500 drop-shadow-md" />
-                    {product.stock < 5 && (
-                      <span className="absolute top-2 left-2 bg-red-100 text-red-700 text-[10px] font-bold px-2 py-1 rounded border border-red-200">Low Stock</span>
-                    )}
+                <div key={product._id} className="bg-slate-900 rounded-2xl border border-slate-800/80 hover:border-amber-500/50 transition-all duration-300 overflow-hidden flex flex-col group shadow-lg">
+                  {/* Image Container */}
+                  <div className="h-44 md:h-52 overflow-hidden relative bg-slate-950/60 p-4 flex justify-center items-center">
+                    <img 
+                      src={getImageUrl(product.image)} 
+                      alt={product.name} 
+                      className="max-h-full max-w-full object-contain group-hover:scale-105 transition-transform duration-500" 
+                    />
+                    
+                    {/* Badges */}
+                    <div className="absolute top-2 left-2 flex flex-col gap-1">
+                      {product.stock <= 5 && product.stock > 0 && (
+                        <span className="bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-extrabold px-2 py-0.5 rounded-md backdrop-blur-sm">
+                          Low Stock ({product.stock})
+                        </span>
+                      )}
+                      {product.isWeeklyDeal && (
+                        <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-md flex items-center gap-1 shadow-md">
+                          <Flame size={12} /> Weekly Deal
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <div className="p-4 flex flex-col flex-1 border-t border-slate-50">
-                    <p className="text-[10px] md:text-xs text-slate-400 font-bold uppercase tracking-wider mb-1">{product.subCategory}</p>
-                    <h3 className="font-bold text-slate-800 text-sm md:text-base mb-1 line-clamp-2 leading-tight">{product.name}</h3>
-                    <p className="text-amber-600 font-extrabold text-lg mb-4 mt-auto">Ksh {product.price}</p>
+
+                  {/* Info Container */}
+                  <div className="p-4 flex flex-col flex-1 border-t border-slate-800/60">
+                    <p className="text-[10px] text-amber-400 font-bold uppercase tracking-wider mb-1">{product.subCategory || product.category}</p>
+                    <h3 className="font-bold text-slate-100 text-xs md:text-sm mb-2 line-clamp-2 leading-snug">{product.name}</h3>
+                    
+                    {/* Gift promotion badge if available */}
+                    {product.weeklyGiftDescription && (
+                      <div className="mb-3 p-1.5 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center gap-1.5 text-[10px] text-amber-300">
+                        <Gift size={12} className="text-amber-400 shrink-0" />
+                        <span className="line-clamp-1">{product.weeklyGiftDescription}</span>
+                      </div>
+                    )}
+
+                    <div className="mt-auto pt-2 flex items-center justify-between">
+                      <div>
+                        <p className="text-slate-500 text-[10px]">Price</p>
+                        <p className="text-amber-400 font-extrabold text-base md:text-lg">Ksh {product.price}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-medium">In Stock: {product.stock}</span>
+                    </div>
+
                     <button 
                       onClick={() => handleAddToCart(product)}
-                      className="w-full bg-slate-900 text-white py-2.5 rounded-lg hover:bg-amber-600 transition-colors flex justify-center items-center gap-2 text-sm font-bold shadow-md"
+                      disabled={product.stock === 0}
+                      className={`w-full mt-3 py-2.5 rounded-xl font-bold flex justify-center items-center gap-2 text-xs transition shadow-md ${
+                        product.stock === 0 
+                          ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                          : 'bg-amber-600 hover:bg-amber-500 text-white shadow-amber-600/20'
+                      }`}
                     >
-                      <ShoppingCart size={16} /> Add to Cart
+                      <ShoppingCart size={14} /> {product.stock === 0 ? "Out of Stock" : "Add to Cart"}
                     </button>
                   </div>
                 </div>
               ))}
             </div>
 
+            {/* EMPTY STATE */}
             {filteredProducts.length === 0 && (
-              <div className="text-center py-20 px-4 bg-white rounded-xl border border-slate-100 mt-4">
-                <AlertCircle className="mx-auto text-slate-300 mb-4" size={48} />
-                <h3 className="text-xl font-bold text-slate-700 mb-2">No Parts Found</h3>
-                <p className="text-slate-500">We couldn't find any hardware matching your current filter.</p>
-                <button onClick={() => {setSearchQuery(""); setSelectedCategory("All");}} className="mt-6 text-amber-600 font-bold hover:underline">Clear all filters</button>
+              <div className="text-center py-20 px-4 bg-slate-900 rounded-2xl border border-slate-800 mt-4">
+                <AlertCircle className="mx-auto text-slate-600 mb-4" size={48} />
+                <h3 className="text-lg font-bold text-slate-200 mb-1">No Hardware Products Found</h3>
+                <p className="text-slate-500 text-xs">Try selecting a different sub-category or clearing search queries.</p>
+                <button 
+                  onClick={() => {setSearchQuery(""); setSelectedCategory("All"); setSelectedSubCategory("All"); setShowDealsOnly(false);}} 
+                  className="mt-5 text-amber-400 font-bold text-xs hover:underline"
+                >
+                  Reset all filters
+                </button>
               </div>
             )}
           </section>
         </main>
       </div>
 
-      {/* WHATSAPP SUPPORT */}
+      {/* WHATSAPP FLOATING BUTTON */}
       <a 
         href={`https://wa.me/${storeSettings.contactPhone.replace(/\s+/g, '')}`} 
         target="_blank" rel="noreferrer"
-        className="fixed bottom-6 right-6 bg-green-500 text-white p-4 rounded-full shadow-xl hover:scale-110 transition-transform z-40 flex items-center justify-center border-4 border-white"
+        className="fixed bottom-6 right-6 bg-emerald-500 text-slate-950 p-3.5 rounded-full shadow-2xl hover:scale-110 transition-transform z-40 flex items-center justify-center border-2 border-slate-900"
       >
-        <MessageCircle size={28} />
+        <MessageCircle size={26} />
       </a>
 
       {/* FOOTER */}
-      <footer className="bg-slate-900 text-slate-400 pt-16 pb-8 border-t-4 border-amber-600">
+      <footer className="bg-slate-900 text-slate-400 pt-16 pb-8 border-t border-slate-800 mt-20">
         <div className="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-12 mb-12">
           <div>
-            <h3 className="text-white text-xl font-extrabold mb-4 flex items-center gap-2"><Wrench className="text-amber-500"/> {storeSettings.storeName}</h3>
-            <p className="text-sm leading-relaxed mb-6">{storeSettings.tagline}</p>
+            <h3 className="text-white text-xl font-black mb-4 flex items-center gap-2"><Wrench className="text-amber-500"/> {storeSettings.storeName}</h3>
+            <p className="text-xs text-slate-400 leading-relaxed mb-6">{storeSettings.tagline}</p>
           </div>
           <div>
-            <h3 className="text-white text-lg font-bold mb-4">Quick Links</h3>
-            <ul className="space-y-3 text-sm">
-              <li><a href="#" className="hover:text-amber-500 transition">Shop Catalog</a></li>
-              <li><a href="#" className="hover:text-amber-500 transition">Returns & Warranty</a></li>
-              <li><a href="#" className="hover:text-amber-500 transition">Bulk Corporate Orders</a></li>
+            <h3 className="text-white text-sm font-bold mb-4 uppercase tracking-wider">Catalogue Links</h3>
+            <ul className="space-y-2 text-xs">
+              <li><a href="#inventory" onClick={() => setSelectedCategory("Vehicle Spare Parts")} className="hover:text-amber-400 transition">Vehicle Spare Parts</a></li>
+              <li><a href="#inventory" onClick={() => setSelectedCategory("Motorcycle & Motorbike Parts")} className="hover:text-amber-400 transition">Motorcycle Spare Parts</a></li>
+              <li><a href="#inventory" onClick={() => setSelectedCategory("Power & Hand Tools")} className="hover:text-amber-400 transition">Power & Hand Tools</a></li>
             </ul>
           </div>
           <div>
-            <h3 className="text-white text-lg font-bold mb-4">Contact Info</h3>
-            <ul className="space-y-3 text-sm">
-              <li className="flex items-center gap-2">📞 <span className="font-medium text-white">{storeSettings.contactPhone}</span></li>
-              <li className="flex items-center gap-2">✉️ <span className="font-medium text-white">support@prohardware.com</span></li>
+            <h3 className="text-white text-sm font-bold mb-4 uppercase tracking-wider">Contact & Support</h3>
+            <ul className="space-y-2 text-xs">
+              <li className="flex items-center gap-2 text-slate-300">📞 {storeSettings.contactPhone}</li>
+              <li className="flex items-center gap-2 text-slate-300">✉️ support@prohardware.com</li>
             </ul>
           </div>
         </div>
-        <div className="text-center text-sm border-t border-slate-800 pt-8">
-          &copy; {new Date().getFullYear()} {storeSettings.storeName}. All rights reserved. Built for professional performance.
+        <div className="text-center text-xs border-t border-slate-800/80 pt-8 text-slate-500">
+          &copy; {new Date().getFullYear()} {storeSettings.storeName}. All rights reserved. Built for heavy-duty industrial performance.
         </div>
       </footer>
 
@@ -700,47 +838,47 @@ export default function ProHardwareApp() {
 
       {/* 1. AUTHENTICATION MODAL */}
       {showAuthModal && (
-        <div className="fixed inset-0 bg-slate-900/80 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-md p-8 relative shadow-2xl border-t-4 border-amber-600">
-            <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-900 transition bg-slate-100 p-2 rounded-full">
-              <X size={20} />
+        <div className="fixed inset-0 bg-slate-950/80 z-[70] flex items-center justify-center p-4 backdrop-blur-md">
+          <div className="bg-slate-900 rounded-3xl w-full max-w-md p-8 relative shadow-2xl border border-slate-800">
+            <button onClick={() => setShowAuthModal(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white transition bg-slate-800 p-2 rounded-full">
+              <X size={18} />
             </button>
-            <h2 className="text-2xl font-extrabold text-slate-900 text-center mb-2">
+            <h2 className="text-2xl font-black text-white text-center mb-1">
               {authMode === 'login' ? 'Welcome Back' : 'Create Account'}
             </h2>
-            <p className="text-center text-slate-500 text-sm mb-8">Access your orders and fast checkout.</p>
+            <p className="text-center text-slate-400 text-xs mb-6">Log in to process orders and cart items.</p>
             
-            <form onSubmit={handleAuth} className="space-y-4">
+            <form onSubmit={handleAuth} className="space-y-4 text-sm">
               {authMode === 'register' && (
                 <>
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-1">Full Name</label>
-                    <input type="text" required value={authForm.fullName} onChange={e => setAuthForm({...authForm, fullName: e.target.value})} className="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none transition" />
+                    <label className="block text-xs font-bold text-slate-400 mb-1">Full Name</label>
+                    <input type="text" required value={authForm.fullName} onChange={e => setAuthForm({...authForm, fullName: e.target.value})} className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl focus:border-amber-500 outline-none transition text-sm" />
                   </div>
                   <div>
-                    <label className="block text-sm font-bold text-slate-700 mb-1">Phone Number</label>
-                    <input type="tel" value={authForm.phone} onChange={e => setAuthForm({...authForm, phone: e.target.value})} className="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none transition" />
+                    <label className="block text-xs font-bold text-slate-400 mb-1">Phone Number</label>
+                    <input type="tel" value={authForm.phone} onChange={e => setAuthForm({...authForm, phone: e.target.value})} className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl focus:border-amber-500 outline-none transition text-sm" />
                   </div>
                 </>
               )}
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Email Address</label>
-                <input type="email" required value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none transition" />
+                <label className="block text-xs font-bold text-slate-400 mb-1">Email Address</label>
+                <input type="email" required value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl focus:border-amber-500 outline-none transition text-sm" />
               </div>
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Password</label>
-                <input type="password" required value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full px-4 py-3 border border-slate-200 bg-slate-50 rounded-lg focus:bg-white focus:ring-2 focus:ring-amber-500 outline-none transition" />
+                <label className="block text-xs font-bold text-slate-400 mb-1">Password</label>
+                <input type="password" required value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full px-4 py-3 bg-slate-950 border border-slate-800 text-white rounded-xl focus:border-amber-500 outline-none transition text-sm" />
               </div>
               
-              <button type="submit" className="w-full bg-amber-600 text-white py-3 rounded-lg font-bold hover:bg-amber-700 transition shadow-lg mt-4">
+              <button type="submit" className="w-full bg-amber-600 text-white py-3.5 rounded-xl font-bold hover:bg-amber-500 transition shadow-lg shadow-amber-600/30 mt-2 text-sm">
                 {authMode === 'login' ? 'Secure Login' : 'Register Account'}
               </button>
             </form>
             
-            <p className="text-center mt-6 text-sm text-slate-600 font-medium">
+            <p className="text-center mt-6 text-xs text-slate-400">
               {authMode === 'login' ? "Don't have an account?" : "Already have an account?"}
-              <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="ml-2 text-amber-600 hover:underline font-bold">
-                {authMode === 'login' ? 'Sign up here' : 'Log in here'}
+              <button onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="ml-2 text-amber-400 hover:underline font-bold">
+                {authMode === 'login' ? 'Sign up' : 'Log in'}
               </button>
             </p>
           </div>
@@ -749,31 +887,31 @@ export default function ProHardwareApp() {
 
       {/* 2. CART DRAWER MODAL */}
       {showCart && (
-        <div className="fixed inset-0 bg-slate-900/60 z-[60] flex justify-end">
-          <div className="bg-white w-full max-w-md h-full shadow-2xl flex flex-col animate-[slideInRight_0.3s_ease-out]">
-            <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
-              <h2 className="text-xl font-bold flex items-center gap-2"><ShoppingCart /> Your Cart</h2>
-              <button onClick={() => setShowCart(false)} className="text-slate-300 hover:text-white"><X size={24} /></button>
+        <div className="fixed inset-0 bg-slate-950/80 z-[60] flex justify-end backdrop-blur-sm">
+          <div className="bg-slate-900 w-full max-w-md h-full shadow-2xl flex flex-col border-l border-slate-800">
+            <div className="p-4 bg-slate-950 border-b border-slate-800 text-white flex justify-between items-center">
+              <h2 className="text-lg font-bold flex items-center gap-2"><ShoppingCart className="text-amber-500" size={20} /> Shopping Cart</h2>
+              <button onClick={() => setShowCart(false)} className="text-slate-400 hover:text-white"><X size={22} /></button>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {!cart.items || cart.items.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-400 space-y-4">
-                  <ShoppingBag size={64} className="text-slate-200" />
-                  <p className="text-lg font-medium">Your cart is completely empty.</p>
+                <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-3">
+                  <ShoppingBag size={48} className="text-slate-700" />
+                  <p className="text-sm font-medium">Your cart is empty.</p>
                 </div>
               ) : (
                 cart.items.map((item: any, idx: number) => (
-                  <div key={idx} className="flex gap-4 bg-slate-50 p-3 rounded-lg border border-slate-100">
-                    <img src={getImageUrl(item.product?.image)} alt="" className="w-20 h-20 object-contain bg-white rounded border" />
+                  <div key={idx} className="flex gap-3 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                    <img src={getImageUrl(item.product?.image)} alt="" className="w-16 h-16 object-contain bg-slate-900 rounded-lg p-1 border border-slate-800" />
                     <div className="flex-1 flex flex-col justify-between">
                       <div>
-                        <h4 className="font-bold text-slate-800 text-sm line-clamp-2">{item.product?.name}</h4>
-                        <p className="text-xs text-slate-500 mt-1">Qty: {item.quantity}</p>
+                        <h4 className="font-bold text-slate-200 text-xs line-clamp-2">{item.product?.name}</h4>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Qty: {item.quantity}</p>
                       </div>
                       <div className="flex justify-between items-center mt-2">
-                        <span className="font-extrabold text-amber-600">Ksh {item.price}</span>
-                        <button onClick={() => handleRemoveFromCart(item.product?._id)} className="text-red-500 hover:bg-red-50 p-1 rounded transition"><Trash2 size={16} /></button>
+                        <span className="font-extrabold text-amber-400 text-sm">Ksh {item.price}</span>
+                        <button onClick={() => handleRemoveFromCart(item.product?._id)} className="text-red-400 hover:bg-red-500/10 p-1 rounded transition"><Trash2 size={16} /></button>
                       </div>
                     </div>
                   </div>
@@ -782,21 +920,21 @@ export default function ProHardwareApp() {
             </div>
             
             {(cart.items && cart.items.length > 0) && (
-              <div className="p-6 bg-slate-50 border-t border-slate-200">
-                <div className="flex justify-between text-lg font-bold text-slate-800 mb-4">
+              <div className="p-6 bg-slate-950 border-t border-slate-800">
+                <div className="flex justify-between text-base font-bold text-slate-200 mb-4">
                   <span>Total Amount</span>
-                  <span className="text-amber-600">Ksh {cart.items.reduce((acc: number, item: any) => acc + (item.price * item.quantity), 0)}</span>
+                  <span className="text-amber-400">Ksh {cart.items.reduce((acc: number, item: any) => acc + (item.price * item.quantity), 0)}</span>
                 </div>
                 <div className="mb-4">
-                  <label className="block text-xs font-bold text-slate-600 uppercase mb-2">Shipping / Garage Address</label>
+                  <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Delivery / Workshop Address</label>
                   <textarea 
                     value={checkoutAddress} onChange={e => setCheckoutAddress(e.target.value)} 
-                    className="w-full p-3 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-amber-500 outline-none resize-none"
-                    rows={2} placeholder="Enter full delivery location or mechanics shop..."
+                    className="w-full p-3 bg-slate-900 border border-slate-800 text-white rounded-xl text-xs focus:border-amber-500 outline-none resize-none"
+                    rows={2} placeholder="Enter your full street address or mechanic shop name..."
                   ></textarea>
                 </div>
-                <button onClick={handleCheckout} className="w-full bg-green-600 text-white py-4 rounded-lg font-bold text-lg hover:bg-green-700 shadow-lg shadow-green-600/30 transition flex items-center justify-center gap-2">
-                  <CheckCircle size={20} /> Place Order
+                <button onClick={handleCheckout} className="w-full bg-emerald-600 text-white py-3.5 rounded-xl font-bold text-sm hover:bg-emerald-500 shadow-lg shadow-emerald-600/20 transition flex items-center justify-center gap-2">
+                  <CheckCircle size={18} /> Place Order
                 </button>
               </div>
             )}
