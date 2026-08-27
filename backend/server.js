@@ -322,40 +322,6 @@ app.delete('/api/cart/clear', protect, async (req, res) => {
 
 // ==================== 3. PRODUCT & CATEGORY ROUTES ====================
 
-// --- NEW ROUTE: Seed Products ---
-app.post('/api/products/seed', async (req, res) => {
-    try {
-        let seedData = req.body;
-
-        // If body is empty, attempt to require seedProducts.js locally
-        if (!seedData || (Array.isArray(seedData) && seedData.length === 0) || Object.keys(seedData).length === 0) {
-            try {
-                // Requires that seedProducts.js exports your product array via: module.exports = [ { name: "...", ... } ];
-                const importedData = require('./seedProducts');
-                seedData = Array.isArray(importedData) ? importedData : (importedData.products || []);
-            } catch (importErr) {
-                console.log("Could not require ./seedProducts.js. Send JSON array in request body.", importErr.message);
-            }
-        }
-
-        if (!Array.isArray(seedData) || seedData.length === 0) {
-            return res.status(400).json({ 
-                message: "No product data found to seed. Send a JSON array in the body or export an array from seedProducts.js." 
-            });
-        }
-
-        // Clear existing products to prevent duplicates upon multiple seed runs
-        await Product.deleteMany({}); 
-        
-        const seeded = await Product.insertMany(seedData);
-        res.status(201).json({ message: "Database seeded successfully!", count: seeded.length });
-    } catch (error) {
-        console.error("Seeding Error:", error);
-        res.status(500).json({ message: 'Failed to seed products', error: error.message });
-    }
-});
-// ---------------------------------
-
 // Fetch All Products (Supports Category Filter & Search)
 app.get('/api/products', async (req, res) => {
     const { category, search } = req.query;
@@ -391,6 +357,27 @@ app.post('/api/products', protect, adminOnly, upload.single('image'), async (req
         res.status(201).json(savedProduct);
     } catch (error) {
         res.status(500).json({ message: 'Failed to create product' });
+    }
+});
+
+// --- BULK SEED PRODUCTS ROUTE (Admin Only) ---
+app.post('/api/products/seed', protect, adminOnly, async (req, res) => {
+    try {
+        const products = req.body.products || req.body; 
+        
+        if (!Array.isArray(products) || products.length === 0) {
+            return res.status(400).json({ message: 'Please provide a valid array of products to seed.' });
+        }
+
+        const seededProducts = await Product.insertMany(products);
+        res.status(201).json({ 
+            message: 'Products seeded successfully via API', 
+            count: seededProducts.length,
+            products: seededProducts
+        });
+    } catch (error) {
+        console.error("API Seeding Error:", error);
+        res.status(500).json({ message: 'Failed to seed products', error: error.message });
     }
 });
 
@@ -598,206 +585,42 @@ app.post('/api/orders', protect, async (req, res) => {
 
         res.status(201).json(order);
     } catch (error) {
-        res.status(500).json({ messageAssuming you are looking to integrate a bulk upload feature or connect an external seed script to your server, I have added two new ways for your server to communicate with `seedProducts`:
-
-1.  **An API Endpoint (`POST /api/products/seed`)**: This allows an external script (like Postman or a standalone `seedProducts.js` file) to send a bulk array of products via HTTP request and insert them all at once.
-2.  **An Internal Startup Function**: I added a `seedProducts()` initialization block right below your existing `seedDatabase()` function. You can use this to automatically import a local JSON file or array when the server starts.
-
-Nothing else has been removed or altered. Here is your complete, all-in-one `server.js` file:
-
-```javascript
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-require('dotenv').config();
-
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-// --- MIDDLEWARE ---
-app.use(cors());
-app.use(express.json());
-
-// Uploads directory for product & UI background images
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-}
-app.use('/uploads', express.static(uploadDir));
-
-// --- MONGODB CONNECTION ---
-const MONGO_URI = process.env.MONGODB_URI 
-  || process.env.MONGO_URI 
-  || 'mongodb+srv://wambuicathrine217_db_user:JM8U3oBz4UxE0DQ9@cluster0.arqtzh6.mongodb.net/hardware_sales?retryWrites=true&w=majority&appName=Cluster0';
-
-mongoose.connect(MONGO_URI)
-  .then(() => console.log("✅ Connected to Hardware Database successfully"))
-  .catch((err) => console.error("❌ MongoDB Connection Error:", err));
-
-// --- SCHEMAS & MODELS ---
-
-// 1. User Schema (Includes Role & Suspension Status)
-const UserSchema = new mongoose.Schema({
-    fullName: { type: String, required: true },
-    email: { type: String, required: true, unique: true },
-    phone: { type: String, default: "" },
-    password: { type: String, required: true },
-    role: { type: String, enum: ['user', 'admin'], default: 'user' },
-    isSuspended: { type: Boolean, default: false },
-    createdAt: { type: Date, default: Date.now }
-});
-const User = mongoose.model('User', UserSchema);
-
-// 2. Hardware Category Schema
-const CategorySchema = new mongoose.Schema({
-    name: { type: String, required: true, unique: true },
-    description: { type: String, default: "" },
-    icon: { type: String, default: "wrench" }
-});
-const Category = mongoose.model('Category', CategorySchema);
-
-// 3. Hardware Product Schema
-const ProductSchema = new mongoose.Schema({
-    name: { type: String, required: true },
-    category: { type: String, required: true }, // e.g. Vehicle Parts, Motorcycle, Tools
-    subCategory: { type: String, required: true }, // e.g. Engine, Brakes, Tires
-    price: { type: Number, required: true },
-    stock: { type: Number, default: 10 },
-    description: { type: String, default: "" },
-    image: { type: String, required: true },
-    isWeeklyDeal: { type: Boolean, default: false },
-    weeklyGiftDescription: { type: String, default: "" },
-    createdAt: { type: Date, default: Date.now }
-});
-const Product = mongoose.model('Product', ProductSchema);
-
-// 4. User Cart Schema
-const CartSchema = new mongoose.Schema({
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
-    items: [
-        {
-            product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
-            quantity: { type: Number, default: 1 },
-            price: { type: Number, required: true }
-        }
-    ],
-    updatedAt: { type: Date, default: Date.now }
-});
-const Cart = mongoose.model('Cart', CartSchema);
-
-// 5. Order Schema
-const OrderSchema = new mongoose.Schema({
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    items: Array,
-    totalAmount: { type: Number, required: true },
-    status: { type: String, enum: ['pending', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
-    shippingAddress: { type: String, required: true },
-    createdAt: { type: Date, default: Date.now }
-});
-const Order = mongoose.model('Order', OrderSchema);
-
-// 6. Admin UI & Background Control Settings
-const StoreSettingsSchema = new mongoose.Schema({
-    storeName: { type: String, default: "ProHardware & Auto Spares" },
-    tagline: { type: String, default: "Your #1 Store for Vehicle Parts, Motorbikes & Tools" },
-    heroTitle: { type: String, default: "Heavy Duty Hardware & Quality Vehicle Spare Parts" },
-    heroSubtitle: { type: String, default: "Genuine motorcycle parts, power tools, and industrial supplies delivered fast." },
-    backgroundImage: { type: String, default: "" },
-    primaryColor: { type: String, default: "#d97706" }, // Hardware Gold/Amber
-    contactPhone: { type: String, default: "+254 700 000 000" },
-    contactEmail: { type: String, default: "support@prohardware.com" }
-});
-const StoreSettings = mongoose.model('StoreSettings', StoreSettingsSchema);
-
-// --- MULTER STORAGE SETUP ---
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'uploads/'),
-    filename: (req, file, cb) => cb(null, 'hardware-' + Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage });
-
-// --- SEEDING DEFAULT ADMINS & CATEGORIES ---
-const seedDatabase = async () => {
-    try {
-        // 1. Seed Store Settings
-        const settings = await StoreSettings.findOne();
-        if (!settings) await StoreSettings.create({});
-
-        // 2. Seed Default Categories for Hardware, Vehicle & Motorcycle Parts
-        const defaultCategories = [
-            { name: "Vehicle Spare Parts", description: "Engine components, brakes, suspension, and filters", icon: "car" },
-            { name: "Motorcycle & Motorbike Parts", description: "Tires, chains, sprockets, cables, and helmets", icon: "bike" },
-            { name: "Power & Hand Tools", description: "Drills, angle grinders, spanners, and saws", icon: "wrench" },
-            { name: "Building & Plumbing Supplies", description: "Pipes, fittings, cement, and fasteners", icon: "hammer" },
-            { name: "Electrical & Solar", description: "Heavy duty wiring, solar panels, and breakers", icon: "zap" }
-        ];
-
-        for (let cat of defaultCategories) {
-            await Category.updateOne({ name: cat.name }, { $setOnInsert: cat }, { upsert: true });
-        }
-
-        // 3. Seed Max 2 Admin Accounts
-        const adminCount = await User.countDocuments({ role: 'admin' });
-        if (adminCount < 2) {
-            const defaultAdmins = [
-                { fullName: "Primary Hardware Admin", email: "admin@hardware.com", pass: "HardwareAdmin123!" },
-                { fullName: "Secondary Hardware Admin", email: "admin2@hardware.com", pass: "HardwareAdmin456!" }
-            ];
-
-            for (let i = adminCount; i < 2; i++) {
-                const adminData = defaultAdmins[i];
-                const existing = await User.findOne({ email: adminData.email });
-                if (!existing) {
-                    const hashedPassword = await bcrypt.hash(adminData.pass, 10);
-                    await User.create({
-                        fullName: adminData.fullName,
-                        email: adminData.email,
-                        password: hashedPassword,
-                        role: 'admin'
-                    });
-                    console.log(`✅ Seeded Admin Account #${i + 1}: ${adminData.email}`);
-                }
-            }
-        }
-    } catch (err) {
-        console.error("Error seeding initial data:", err);
+        res.status(500).json({ message: 'Failed to place order' });
     }
-};
-seedDatabase();
+});
 
-// --- OPTIONAL: INTERNAL PRODUCT SEEDING (ON STARTUP) ---
-// If you have a local JSON file or JS module with product data, you can import and seed it here.
-// const seedProductsData = require('./seedProducts.json'); 
-const seedProducts = async () => {
+// Get User Orders
+app.get('/api/orders/my-orders', protect, async (req, res) => {
     try {
-        const productCount = await Product.countDocuments();
-        if (productCount === 0) {
-            // Uncomment the line below when you have your seed data imported
-            // await Product.insertMany(seedProductsData);
-            // console.log("✅ Successfully seeded default products on startup");
-        }
-    } catch (err) {
-        console.error("Error internally seeding products:", err);
+        const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
+        res.json(orders);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch order history' });
     }
-};
-// Uncomment the line below to run this on server start
-// seedProducts();
+});
 
-
-// --- AUTHENTICATION & SECURITY MIDDLEWARES ---
-
-// Verify JWT Token & Check User Status
-const protect = async (req, res, next) => {
-    let token = req.headers.authorization && req.headers.authorization.split(' ')[1];
-    if (!token) return res.status(401).json({ message: 'Unauthorized, no security token' });
-
+// Admin View All Orders
+app.get('/api/admin/orders', protect, adminOnly, async (req, res) => {
     try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_key');
-        const user = await User.findById(decoded.id).select('-password');
-        
-        if (!user) return res.status(401).json({ message: 'User account no longer exists
+        const orders = await Order.find().populate('user', 'fullName email phone').sort({ createdAt: -1 });
+        res.json(orders);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch customer orders' });
+    }
+});
+
+// Admin Update Order Status
+app.put('/api/admin/orders/:id/status', protect, adminOnly, async (req, res) => {
+    try {
+        const { status } = req.body;
+        const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
+        res.json(order);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to update order status' });
+    }
+});
+
+// --- START SERVER ---
+app.listen(PORT, () => {
+    console.log(`🚀 Hardware Sales Server running on port ${PORT}`);
+});
