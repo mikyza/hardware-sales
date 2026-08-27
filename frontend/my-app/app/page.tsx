@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 
 // --- API CONFIGURATION ---
-const API_BASE_URL = 'http://localhost:5000'; // Update to your Render/AWS URL when deployed
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://hardware-sales.onrender.com';
 
 // --- HELPER TO FORMAT IMAGE URLS ---
 const getImageUrl = (url: string) => {
