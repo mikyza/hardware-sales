@@ -132,7 +132,7 @@ export default function ProHardwareApp() {
       if (catRes.ok) setCategories(await catRes.json());
       if (setRes && setRes.ok) {
         const settings = await setRes.json();
-        setStoreSettings(prev => ({...prev, ...settings}));
+       setStoreSettings((prev: any) => ({...prev, ...settings}));
       }
     } catch (err) { console.error("Error fetching initial data", err); }
   };
