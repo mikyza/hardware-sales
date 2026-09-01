@@ -284,6 +284,25 @@ export default function ProHardwareApp() {
     } catch (err) { alert("Error adding product"); }
   };
 
+  const handleDeleteProduct = async (productId: string) => {
+    if (!window.confirm("Are you sure you want to delete this product?")) return;
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/products/${productId}`, {
+        method: 'DELETE',
+        headers: adminHeaders
+      });
+      if (res.ok) {
+        alert("Product deleted successfully!");
+        fetchInitialData();
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        alert(errorData.message || "Failed to delete product");
+      }
+    } catch (err) {
+      alert("Error deleting product");
+    }
+  };
+
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -325,7 +344,6 @@ export default function ProHardwareApp() {
         body: JSON.stringify(storeSettings)
       });
       if (res.ok) alert("Settings updated!");
-      // If API fails, update local state for preview anyway
       setStoreSettings(storeSettings);
     } catch (err) { 
       alert("Applied locally (Backend sync failed)");
@@ -504,7 +522,11 @@ export default function ProHardwareApp() {
                           {p.stock}
                         </span>
                       </td>
-                      <td className="p-3"><button className="text-red-400 hover:text-red-300 transition"><Trash2 size={16} /></button></td>
+                      <td className="p-3">
+                        <button onClick={() => handleDeleteProduct(p._id)} className="text-red-400 hover:text-red-300 transition">
+                          <Trash2 size={16} />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
