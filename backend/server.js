@@ -33,7 +33,7 @@ mongoose.connect(MONGO_URI)
 
 // --- SCHEMAS & MODELS ---
 
-// 1. User Schema (Includes Role & Suspension Status)
+// 1. User Schema 
 const UserSchema = new mongoose.Schema({
     fullName: { type: String, required: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -45,25 +45,27 @@ const UserSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', UserSchema);
 
-// 2. Hardware Category Schema
+// 2. Hardware Category Schema (Updated with Subcategories)
 const CategorySchema = new mongoose.Schema({
     name: { type: String, required: true, unique: true },
     description: { type: String, default: "" },
-    icon: { type: String, default: "wrench" }
+    icon: { type: String, default: "wrench" },
+    subCategories: [{ type: String }] // Added to support nested panels
 });
 const Category = mongoose.model('Category', CategorySchema);
 
-// 3. Hardware Product Schema
+// 3. Hardware Product Schema (Updated for General Offers & Pricing)
 const ProductSchema = new mongoose.Schema({
     name: { type: String, required: true },
-    category: { type: String, required: true }, // e.g. Vehicle Parts, Motorcycle, Tools
-    subCategory: { type: String, required: true }, // e.g. Engine, Brakes, Tires
+    category: { type: String, required: true }, 
+    subCategory: { type: String, required: true }, 
     price: { type: Number, required: true },
     stock: { type: Number, default: 10 },
     description: { type: String, default: "" },
-    image: { type: String, required: true },
-    isWeeklyDeal: { type: Boolean, default: false },
-    weeklyGiftDescription: { type: String, default: "" },
+    image: { type: String, required: true }, // Can be an uploaded file path OR a direct link
+    isOffer: { type: Boolean, default: false }, // Replaced weekly deal with general offers
+    offerDiscount: { type: Number, default: 0 }, // e.g., 10 for 10% off or 500 for KES 500 off
+    offerDescription: { type: String, default: "" },
     createdAt: { type: Date, default: Date.now }
 });
 const Product = mongoose.model('Product', ProductSchema);
@@ -82,29 +84,51 @@ const CartSchema = new mongoose.Schema({
 });
 const Cart = mongoose.model('Cart', CartSchema);
 
-// 5. Order Schema
+// 5. Order Schema (Updated for Tracking & Structured Kenyan Shipping)
 const OrderSchema = new mongoose.Schema({
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     items: Array,
     totalAmount: { type: Number, required: true },
-    status: { type: String, enum: ['pending', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
-    shippingAddress: { type: String, required: true },
+    status: { type: String, enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
+    shippingAddress: {
+        county: { type: String, required: true },
+        subCounty: { type: String, required: true },
+        town: { type: String, required: true },
+        specificDetails: { type: String, required: true }
+    },
+    trackingNumber: { type: String }, // For user to track
+    trackingHistory: [{
+        status: { type: String },
+        location: { type: String },
+        timestamp: { type: Date, default: Date.now },
+        message: { type: String }
+    }],
     createdAt: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', OrderSchema);
 
-// 6. Admin UI & Background Control Settings
+// 6. Admin UI & Background Control Settings (Expanded)
 const StoreSettingsSchema = new mongoose.Schema({
     storeName: { type: String, default: "ProHardware & Auto Spares" },
     tagline: { type: String, default: "Your #1 Store for Vehicle Parts, Motorbikes & Tools" },
     heroTitle: { type: String, default: "Heavy Duty Hardware & Quality Vehicle Spare Parts" },
     heroSubtitle: { type: String, default: "Genuine motorcycle parts, power tools, and industrial supplies delivered fast." },
-    backgroundImage: { type: String, default: "" },
-    primaryColor: { type: String, default: "#d97706" }, // Hardware Gold/Amber
+    backgroundImage: { type: String, default: "" }, // Allows admin to change background
+    primaryColor: { type: String, default: "#d97706" }, 
+    layoutType: { type: String, default: "modern" }, // Added for layout swapping
     contactPhone: { type: String, default: "+254 700 000 000" },
     contactEmail: { type: String, default: "support@prohardware.com" }
 });
 const StoreSettings = mongoose.model('StoreSettings', StoreSettingsSchema);
+
+// 7. System Logs Schema (New for Admin Auditing)
+const LogSchema = new mongoose.Schema({
+    actionType: { type: String, required: true }, // e.g., 'ACCOUNT_CREATION', 'TRANSACTION', 'PRODUCT_ADDED'
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    details: { type: Object, default: {} },
+    timestamp: { type: Date, default: Date.now }
+});
+const Log = mongoose.model('Log', LogSchema);
 
 // --- MULTER STORAGE SETUP ---
 const storage = multer.diskStorage({
@@ -113,7 +137,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// --- FULL INITIAL PRODUCTS CATALOGUE (From Source 5) ---
+// --- FULL INITIAL PRODUCTS CATALOGUE ---
 const initialProducts = [
     // ==================== 1. VEHICLE SPARE PARTS ====================
     {
@@ -300,31 +324,28 @@ const initialProducts = [
 // --- SEEDING DEFAULT ADMINS, CATEGORIES & PRODUCTS ON STARTUP ---
 const seedDatabase = async () => {
     try {
-        // 1. Seed Store Settings
         const settings = await StoreSettings.findOne();
         if (!settings) await StoreSettings.create({});
 
-        // 2. Seed Default Categories for Hardware, Vehicle & Motorcycle Parts
+        // Updated Categories to include structured subCategories array
         const defaultCategories = [
-            { name: "Vehicle Spare Parts", description: "Engine components, brakes, suspension, and filters", icon: "car" },
-            { name: "Motorcycle & Motorbike Parts", description: "Tires, chains, sprockets, cables, and helmets", icon: "bike" },
-            { name: "Power & Hand Tools", description: "Drills, angle grinders, spanners, and saws", icon: "wrench" },
-            { name: "Building & Plumbing Supplies", description: "Pipes, fittings, cement, and fasteners", icon: "hammer" },
-            { name: "Electrical & Solar", description: "Heavy duty wiring, solar panels, and breakers", icon: "zap" }
+            { name: "Vehicle Spare Parts", description: "Engine components, brakes, suspension, and filters", icon: "car", subCategories: ["Engine", "Filters", "Brakes", "Suspension", "Electrical & Battery"] },
+            { name: "Motorcycle & Motorbike Parts", description: "Tires, chains, sprockets, cables, and helmets", icon: "bike", subCategories: ["Tires & Tubes", "Chains & Drive", "Rider Protective Gear", "Cables & Levers"] },
+            { name: "Power & Hand Tools", description: "Drills, angle grinders, spanners, and saws", icon: "wrench", subCategories: ["Power Drills", "Grinders & Cutters", "Hand Tools", "Saws & Woodworking"] },
+            { name: "Building & Plumbing Supplies", description: "Pipes, fittings, cement, and fasteners", icon: "hammer", subCategories: ["Pipes & Fittings", "Cement & Adhesives", "Fasteners & Fixings"] },
+            { name: "Electrical & Solar", description: "Heavy duty wiring, solar panels, and breakers", icon: "zap", subCategories: ["Solar Panels & Systems", "Wiring & Cables", "Switches & Circuit Protection"] }
         ];
 
         for (let cat of defaultCategories) {
             await Category.updateOne({ name: cat.name }, { $setOnInsert: cat }, { upsert: true });
         }
 
-        // 3. Auto-seed Full Product Catalogue if empty (Solves Render empty array issue)
         const productCount = await Product.countDocuments();
         if (productCount === 0) {
             await Product.insertMany(initialProducts);
             console.log(`✅ Automatically seeded ${initialProducts.length} items across all categories into MongoDB Atlas!`);
         }
 
-        // 4. Seed Default Admin Accounts
         const adminCount = await User.countDocuments({ role: 'admin' });
         if (adminCount < 2) {
             const defaultAdmins = [
@@ -337,12 +358,15 @@ const seedDatabase = async () => {
                 const existing = await User.findOne({ email: adminData.email });
                 if (!existing) {
                     const hashedPassword = await bcrypt.hash(adminData.pass, 10);
-                    await User.create({
+                    const adminUser = await User.create({
                         fullName: adminData.fullName,
                         email: adminData.email,
                         password: hashedPassword,
                         role: 'admin'
                     });
+                    
+                    // Log admin creation
+                    await Log.create({ actionType: 'ACCOUNT_CREATION', user: adminUser._id, details: { method: 'Auto-seed', role: 'admin' } });
                     console.log(`✅ Seeded Admin Account #${i + 1}: ${adminData.email}`);
                 }
             }
@@ -355,7 +379,6 @@ seedDatabase();
 
 // --- AUTHENTICATION & SECURITY MIDDLEWARES ---
 
-// Verify JWT Token & Check User Status
 const protect = async (req, res, next) => {
     let token = req.headers.authorization && req.headers.authorization.split(' ')[1];
     if (!token) return res.status(401).json({ message: 'Unauthorized, no security token' });
@@ -374,7 +397,6 @@ const protect = async (req, res, next) => {
     }
 };
 
-// Admin Privilege Guard
 const adminOnly = (req, res, next) => {
     if (req.user && req.user.role === 'admin') {
         next();
@@ -387,7 +409,6 @@ const adminOnly = (req, res, next) => {
 
 // ==================== 1. USER AUTH ROUTES ====================
 
-// User Signup (Forces njorogemichael37@gmail.com to be Admin automatically)
 app.post('/api/auth/register', async (req, res) => {
     const { fullName, email, password, phone } = req.body;
     try {
@@ -399,7 +420,6 @@ app.post('/api/auth/register', async (req, res) => {
         const userExists = await User.findOne({ email: normalizedEmail });
         if (userExists) return res.status(400).json({ message: 'Email address is already registered' });
 
-        // Assign 'admin' role if email matches the requested address, otherwise 'user'
         const assignedRole = (normalizedEmail === 'njorogemichael37@gmail.com') ? 'admin' : 'user';
 
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -411,8 +431,10 @@ app.post('/api/auth/register', async (req, res) => {
             role: assignedRole 
         });
 
-        // Initialize user cart
         await Cart.create({ user: user._id, items: [] });
+        
+        // Log account creation timestamp & details
+        await Log.create({ actionType: 'ACCOUNT_CREATION', user: user._id, details: { email: user.email, role: user.role }});
 
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'secret_key', { expiresIn: '7d' });
 
@@ -426,7 +448,6 @@ app.post('/api/auth/register', async (req, res) => {
     }
 });
 
-// User & Admin Login
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -441,6 +462,9 @@ app.post('/api/auth/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(401).json({ message: 'Invalid email or password' });
 
+        // Log login activity
+        await Log.create({ actionType: 'USER_LOGIN', user: user._id, details: { email: user.email }});
+
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET || 'secret_key', { expiresIn: '7d' });
 
         res.json({
@@ -452,14 +476,12 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
-// Get Current User Profile
 app.get('/api/auth/me', protect, async (req, res) => {
     res.json(req.user);
 });
 
-// ==================== 2. CART ROUTES (USER-SPECIFIC) ====================
+// ==================== 2. CART ROUTES ====================
 
-// Get User Cart
 app.get('/api/cart', protect, async (req, res) => {
     try {
         let cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
@@ -470,12 +492,14 @@ app.get('/api/cart', protect, async (req, res) => {
     }
 });
 
-// Add Item to Cart
 app.post('/api/cart/add', protect, async (req, res) => {
     const { productId, quantity } = req.body;
     try {
         const product = await Product.findById(productId);
         if (!product) return res.status(404).json({ message: 'Product not found' });
+
+        // Calculate active price (Apply discount if item is on offer)
+        const activePrice = product.isOffer ? (product.price - product.offerDiscount) : product.price;
 
         let cart = await Cart.findOne({ user: req.user._id });
         if (!cart) cart = await Cart.create({ user: req.user._id, items: [] });
@@ -485,7 +509,7 @@ app.post('/api/cart/add', protect, async (req, res) => {
         if (itemIndex > -1) {
             cart.items[itemIndex].quantity += (quantity || 1);
         } else {
-            cart.items.push({ product: productId, quantity: quantity || 1, price: product.price });
+            cart.items.push({ product: productId, quantity: quantity || 1, price: activePrice });
         }
 
         cart.updatedAt = Date.now();
@@ -498,7 +522,6 @@ app.post('/api/cart/add', protect, async (req, res) => {
     }
 });
 
-// Remove Single Item from Cart
 app.delete('/api/cart/item/:productId', protect, async (req, res) => {
     try {
         let cart = await Cart.findOne({ user: req.user._id });
@@ -513,7 +536,6 @@ app.delete('/api/cart/item/:productId', protect, async (req, res) => {
     }
 });
 
-// Clear Entire Cart
 app.delete('/api/cart/clear', protect, async (req, res) => {
     try {
         await Cart.findOneAndUpdate({ user: req.user._id }, { items: [] });
@@ -525,13 +547,13 @@ app.delete('/api/cart/clear', protect, async (req, res) => {
 
 // ==================== 3. PRODUCT & CATEGORY ROUTES ====================
 
-// Fetch All Products (Supports Category Filter & Search)
 app.get('/api/products', async (req, res) => {
-    const { category, search } = req.query;
+    const { category, search, isOffer } = req.query;
     let query = {};
 
     if (category) query.category = category;
     if (search) query.name = { $regex: search, $options: 'i' };
+    if (isOffer) query.isOffer = true;
 
     try {
         const products = await Product.find(query).sort({ createdAt: -1 });
@@ -541,14 +563,16 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// Add Hardware Product (Admin Only)
+// Add Hardware Product (Admin Only) - Now supports direct image links and file uploads
 app.post('/api/products', protect, adminOnly, upload.single('image'), async (req, res) => {
     try {
-        const { name, category, subCategory, price, stock, description } = req.body;
-        const imageUrl = req.file ? `/uploads/${req.file.filename}` : req.body.image;
+        const { name, category, subCategory, price, stock, description, imageLink } = req.body;
+        
+        // Use uploaded file OR provided direct link string
+        const imageUrl = req.file ? `/uploads/${req.file.filename}` : (imageLink || req.body.image);
 
         if (!name || !category || !subCategory || !price || !imageUrl) {
-            return res.status(400).json({ message: 'Please fill in all required product fields' });
+            return res.status(400).json({ message: 'Please fill in all required product fields including an image or link' });
         }
 
         const product = new Product({
@@ -557,13 +581,13 @@ app.post('/api/products', protect, adminOnly, upload.single('image'), async (req
         });
 
         const savedProduct = await product.save();
+        await Log.create({ actionType: 'PRODUCT_ADDED', user: req.user._id, details: { productName: name }});
         res.status(201).json(savedProduct);
     } catch (error) {
         res.status(500).json({ message: 'Failed to create product' });
     }
 });
 
-// --- BULK SEED PRODUCTS ROUTE (Admin Only) ---
 app.post('/api/products/seed', protect, adminOnly, async (req, res) => {
     try {
         const products = req.body.products || req.body; 
@@ -584,7 +608,6 @@ app.post('/api/products/seed', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Update Hardware Product (Admin Only)
 app.put('/api/products/:id', protect, adminOnly, upload.single('image'), async (req, res) => {
     try {
         const updates = { ...req.body };
@@ -597,7 +620,6 @@ app.put('/api/products/:id', protect, adminOnly, upload.single('image'), async (
     }
 });
 
-// Delete Hardware Product (Admin Only)
 app.delete('/api/products/:id', protect, adminOnly, async (req, res) => {
     try {
         await Product.findByIdAndDelete(req.params.id);
@@ -607,22 +629,21 @@ app.delete('/api/products/:id', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Set Weekly Deal Product (Admin Only)
-app.put('/api/products/weekly-deal/:id', protect, adminOnly, async (req, res) => {
+// General Offers Engine (Admin Only) - Replaces limited "Weekly Deal"
+app.put('/api/products/:id/offer', protect, adminOnly, async (req, res) => {
     try {
-        await Product.updateMany({}, { isWeeklyDeal: false, weeklyGiftDescription: "" });
+        const { isOffer, offerDiscount, offerDescription } = req.body;
         const updated = await Product.findByIdAndUpdate(
             req.params.id,
-            { isWeeklyDeal: true, weeklyGiftDescription: req.body.weeklyGiftDescription || "Special Hardware Discount!" },
+            { isOffer, offerDiscount: Number(offerDiscount) || 0, offerDescription },
             { new: true }
         );
         res.json(updated);
     } catch (error) {
-        res.status(500).json({ message: 'Failed to set weekly deal' });
+        res.status(500).json({ message: 'Failed to update product offer settings' });
     }
 });
 
-// Get Hardware Categories
 app.get('/api/categories', async (req, res) => {
     try {
         const categories = await Category.find({});
@@ -632,18 +653,16 @@ app.get('/api/categories', async (req, res) => {
     }
 });
 
-// Add Hardware Category (Admin Only)
 app.post('/api/categories', protect, adminOnly, async (req, res) => {
     try {
-        const { name, description, icon } = req.body;
-        const category = await Category.create({ name, description, icon });
+        const { name, description, icon, subCategories } = req.body;
+        const category = await Category.create({ name, description, icon, subCategories: subCategories || [] });
         res.status(201).json(category);
     } catch (error) {
         res.status(400).json({ message: 'Category already exists or invalid data' });
     }
 });
 
-// Delete Hardware Category (Admin Only)
 app.delete('/api/categories/:id', protect, adminOnly, async (req, res) => {
     try {
         await Category.findByIdAndDelete(req.params.id);
@@ -653,9 +672,32 @@ app.delete('/api/categories/:id', protect, adminOnly, async (req, res) => {
     }
 });
 
-// ==================== 4. RESTRICTED ADMIN PANEL USER CONTROL ====================
+// ==================== 4. KENYAN SHIPPING LOCATIONS ====================
 
-// Get All Users (Admin Only)
+// Fetch All 47 Counties for Shipping Checkout
+app.get('/api/shipping/counties', async (req, res) => {
+    const counties = [
+        "Mombasa", "Kwale", "Kilifi", "Tana River", "Lamu", "Taita-Taveta", "Garissa", "Wajir", "Mandera", "Marsabit",
+        "Isiolo", "Meru", "Tharaka-Nithi", "Embu", "Kitui", "Machakos", "Makueni", "Nyandarua", "Nyeri", "Kirinyaga",
+        "Murang'a", "Kiambu", "Turkana", "West Pokot", "Samburu", "Trans-Nzoia", "Uasin Gishu", "Elgeyo-Marakwet",
+        "Nandi", "Baringo", "Laikipia", "Nakuru", "Narok", "Kajiado", "Kericho", "Bomet", "Kakamega", "Vihiga",
+        "Bungoma", "Busia", "Siaya", "Kisumu", "Homa Bay", "Migori", "Kisii", "Nyamira", "Nairobi"
+    ];
+    res.json(counties);
+});
+
+// ==================== 5. RESTRICTED ADMIN LOGS & USER CONTROL ====================
+
+// View all System Logs (Admin Only)
+app.get('/api/admin/logs', protect, adminOnly, async (req, res) => {
+    try {
+        const logs = await Log.find().populate('user', 'fullName email').sort({ timestamp: -1 });
+        res.json(logs);
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to retrieve logs' });
+    }
+});
+
 app.get('/api/admin/users', protect, adminOnly, async (req, res) => {
     try {
         const users = await User.find().select('-password').sort({ createdAt: -1 });
@@ -665,7 +707,6 @@ app.get('/api/admin/users', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Suspend / Unsuspend User (Admin Only)
 app.put('/api/admin/users/:id/suspend', protect, adminOnly, async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
@@ -674,6 +715,8 @@ app.put('/api/admin/users/:id/suspend', protect, adminOnly, async (req, res) => 
 
         user.isSuspended = !user.isSuspended;
         await user.save();
+        
+        await Log.create({ actionType: 'USER_SUSPENDED', user: req.user._id, details: { suspendedUser: user.email, status: user.isSuspended }});
 
         res.json({ message: `User status changed to ${user.isSuspended ? 'Suspended' : 'Active'}`, isSuspended: user.isSuspended });
     } catch (error) {
@@ -681,7 +724,6 @@ app.put('/api/admin/users/:id/suspend', protect, adminOnly, async (req, res) => 
     }
 });
 
-// Update User Details (Admin Only)
 app.put('/api/admin/users/:id', protect, adminOnly, async (req, res) => {
     try {
         const { fullName, email, phone } = req.body;
@@ -696,7 +738,6 @@ app.put('/api/admin/users/:id', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Delete User Account (Admin Only)
 app.delete('/api/admin/users/:id', protect, adminOnly, async (req, res) => {
     try {
         const user = await User.findById(req.params.id);
@@ -711,19 +752,18 @@ app.delete('/api/admin/users/:id', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Promotes a user to Admin
 app.put('/api/admin/promote/:id', protect, adminOnly, async (req, res) => {
     try {
         const user = await User.findByIdAndUpdate(req.params.id, { role: 'admin' }, { new: true }).select('-password');
+        await Log.create({ actionType: 'ADMIN_PROMOTION', user: req.user._id, details: { promotedUser: user.email }});
         res.json({ message: 'User successfully promoted to Admin', user });
     } catch (error) {
         res.status(500).json({ message: 'Failed to promote user' });
     }
 });
 
-// ==================== 5. STORE UI, BACKGROUND & THEME SETTINGS ====================
+// ==================== 6. STORE UI, BACKGROUND & THEME SETTINGS ====================
 
-// Get UI Settings (Public)
 app.get('/api/settings', async (req, res) => {
     try {
         const settings = await StoreSettings.findOne();
@@ -733,22 +773,27 @@ app.get('/api/settings', async (req, res) => {
     }
 });
 
-// Update UI & Background (Admin Only)
 app.put('/api/settings', protect, adminOnly, upload.single('backgroundImage'), async (req, res) => {
     try {
         let settings = await StoreSettings.findOne();
         if (!settings) settings = new StoreSettings();
 
-        const { storeName, tagline, heroTitle, heroSubtitle, primaryColor, contactPhone, contactEmail } = req.body;
+        const { storeName, tagline, heroTitle, heroSubtitle, primaryColor, layoutType, contactPhone, contactEmail, backgroundLink } = req.body;
 
         if (storeName) settings.storeName = storeName;
         if (tagline) settings.tagline = tagline;
         if (heroTitle) settings.heroTitle = heroTitle;
         if (heroSubtitle) settings.heroSubtitle = heroSubtitle;
         if (primaryColor) settings.primaryColor = primaryColor;
+        if (layoutType) settings.layoutType = layoutType;
         if (contactPhone) settings.contactPhone = contactPhone;
         if (contactEmail) settings.contactEmail = contactEmail;
-        if (req.file) settings.backgroundImage = `/uploads/${req.file.filename}`;
+        
+        if (req.file) {
+            settings.backgroundImage = `/uploads/${req.file.filename}`;
+        } else if (backgroundLink) {
+            settings.backgroundImage = backgroundLink; // Allows background by external link
+        }
 
         await settings.save();
         res.json(settings);
@@ -757,11 +802,10 @@ app.put('/api/settings', protect, adminOnly, upload.single('backgroundImage'), a
     }
 });
 
-// ==================== 6. ORDER PROCESSING ====================
+// ==================== 7. ORDER PROCESSING & TRACKING ====================
 
-// Place Order (Checkout Cart)
 app.post('/api/orders', protect, async (req, res) => {
-    const { shippingAddress } = req.body;
+    const { shippingAddress } = req.body; // Expects object: { county, subCounty, town, specificDetails }
     try {
         const cart = await Cart.findOne({ user: req.user._id }).populate('items.product');
         if (!cart || cart.items.length === 0) {
@@ -769,17 +813,23 @@ app.post('/api/orders', protect, async (req, res) => {
         }
 
         const totalAmount = cart.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+        
+        // Generate a random tracking number
+        const trackingNumber = `TRK-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
         const order = await Order.create({
             user: req.user._id,
             items: cart.items,
             totalAmount,
-            shippingAddress
+            shippingAddress,
+            trackingNumber,
+            trackingHistory: [{ status: 'Order Placed', location: 'System', message: 'Your order has been received' }]
         });
 
-        // Clear cart after checkout
         cart.items = [];
         await cart.save();
+
+        await Log.create({ actionType: 'TRANSACTION', user: req.user._id, details: { orderId: order._id, amount: totalAmount }});
 
         res.status(201).json(order);
     } catch (error) {
@@ -787,7 +837,17 @@ app.post('/api/orders', protect, async (req, res) => {
     }
 });
 
-// Get User Orders
+// User tracks their order by tracking ID
+app.get('/api/orders/track/:trackingNumber', async (req, res) => {
+    try {
+        const order = await Order.findOne({ trackingNumber: req.params.trackingNumber });
+        if (!order) return res.status(404).json({ message: 'Invalid tracking number' });
+        res.json({ trackingNumber: order.trackingNumber, status: order.status, history: order.trackingHistory });
+    } catch (error) {
+        res.status(500).json({ message: 'Failed to track order' });
+    }
+});
+
 app.get('/api/orders/my-orders', protect, async (req, res) => {
     try {
         const orders = await Order.find({ user: req.user._id }).sort({ createdAt: -1 });
@@ -797,7 +857,6 @@ app.get('/api/orders/my-orders', protect, async (req, res) => {
     }
 });
 
-// Admin View All Orders
 app.get('/api/admin/orders', protect, adminOnly, async (req, res) => {
     try {
         const orders = await Order.find().populate('user', 'fullName email phone').sort({ createdAt: -1 });
@@ -807,12 +866,23 @@ app.get('/api/admin/orders', protect, adminOnly, async (req, res) => {
     }
 });
 
-// Admin Update Order Status
+// Admin updates status AND pushes to User Tracking History
 app.put('/api/admin/orders/:id/status', protect, adminOnly, async (req, res) => {
     try {
-        const { status } = req.body;
-        const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true });
-        res.json(order);
+        const { status, location, message } = req.body;
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) return res.status(404).json({ message: 'Order not found' });
+        
+        order.status = status;
+        order.trackingHistory.push({
+            status,
+            location: location || 'Warehouse',
+            message: message || `Order status updated to ${status}`
+        });
+
+        const updatedOrder = await order.save();
+        res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: 'Failed to update order status' });
     }
